@@ -1,0 +1,14 @@
+{
+  "base_model": {
+    "max_steering": 22,
+    "steering_speed": 12,
+    "max_velocity": 1,
+    "acceleration": 0.5,
+    "deceleration": 4.0,
+    "car_length": 0.3,
+    "car_width": 0.2,
+    "drag_coefficient": 0.3,
+    "slipage_coefficient": 0.001,
+    "drifting_coefficient": 0.005
+  }
+}
