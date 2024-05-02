@@ -1,10 +1,21 @@
+from enum import Enum
 import numpy as np
 import math
 import pygame as pg
 from pygame.math import Vector2
 
 from config import Config as cfg
+import gymnasium
+from gymnasium import spaces
 
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
+
+CAR_START_POSITION = (3, 10)
+TRACK_IMAGE_PATH = "track.png"
+
+# Parts of this class are based on the CarModel class i implemented for my semesters project 1. (SlamCar) (base_model.py) https://github.com/lherrman/slamcar-controller
 class CarModel:
     def __init__(self, x, y):
         self.length = 0             # length of the car in meters
@@ -34,10 +45,23 @@ class CarModel:
         self.trace_tires = [[],[]] # list of points that the tires have passed
         self.draw_tire_trace = False # draw the track the tires have passed
 
+        self.track_boundaries = self._load_track_boundaries_from_image("track.png")
+
     def update(self, dt):
         self._update_inputs(dt)
         self._update_position(dt)
         self._update_trace()
+
+    def _load_track_boundaries_from_image(self, image_path) -> dict:
+        image_path = "track.png"
+        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        assert len(contours) == 2, "There should be exactly 2 contours in the image"
+        return {
+            'inner': contours[0],
+            'outer': contours[1]
+        }   
+
 
     def load_parameters(self):
         self.length = cfg.get("car_length")
@@ -46,18 +70,14 @@ class CarModel:
         self.max_velocity = cfg.get("max_velocity")
         self.acceleration_speed = cfg.get("acceleration")
         self.steering_speed = cfg.get("steering_speed")
-        self.drag_coefficient = cfg.get("drag_coefficient")
-        self.slipage_coefficient = cfg.get("slipage_coefficient")
-        self.drifting_coefficient = cfg.get("drifting_coefficient")
+        self.drag_coefficient = cfg.get("drag_coefficient") # Currently not used
+        self.slipage_coefficient = cfg.get("slipage_coefficient") # Currently not used
+        self.drifting_coefficient = cfg.get("drifting_coefficient") # Currently not used
 
     def _update_position(self, dt):
         # Apply steering
         steering_angle = math.radians(self.steering * self.velocity_magnitude * 20)  # Adjust as needed
         self.heading = self.heading.rotate(steering_angle)
-
-        # Apply acceleration
-        self.velocity_magnitude += self.acceleration_speed * dt
-        self.velocity_magnitude = min(self.velocity_magnitude, self.max_velocity)
 
         # Apply drag
         drag_force = -self.drag_coefficient * self.velocity_magnitude * self.velocity_magnitude
@@ -110,9 +130,9 @@ class CarModel:
             self.velocity_magnitude = min(self.max_velocity, 
                                           self.velocity_magnitude + self.acceleration_speed * dt)
         if down:
-            self.velocity_magnitude = max(-self.max_velocity, 
+            self.velocity_magnitude = max(0, 
                                           self.velocity_magnitude - self.acceleration_speed * dt)
-
+            
         # If neither is pressed, reduce velocity to 0
         if not up and not down:
             if self.velocity_magnitude > 0:
@@ -154,10 +174,29 @@ class CarModel:
         self._update_camera_position(screen)
 
         self._draw_grid(screen)
+        self._draw_track_boundaries(screen)
         self._draw_trace(screen)
         self._draw_tires(screen)
         self._draw_car(screen)
 
+    def _draw_track_boundaries(self, screen):
+        for boundary in self.track_boundaries.values():
+            boundary_points = boundary[:, 0, :]
+            boundary_points = boundary_points[::6] # only use every xth point to improve performance
+
+            # zip shifted versions of the list to draw lines between the points
+            boundary_points_0 = boundary_points[:-1]
+            boundary_points_1 = boundary_points[1:]
+            for p1, p2 in zip(boundary_points_0, boundary_points_1):
+                p1 = Vector2(p1[0], p1[1])
+                p2 = Vector2(p2[0], p2[1])
+                p1 = p1 - self.camera_position_smooth * self.ppu
+                p2 = p2 - self.camera_position_smooth * self.ppu
+                if p1.x < 0 and p2.x < 0:
+                    continue
+                if p1.y < 0 and p2.y < 0:
+                    continue
+                pg.draw.line(screen, (255, 0, 0), p1, p2, 2)
 
     def _update_camera_position(self, screen):
         self.camera_position = self.position - (Vector2(*screen.get_rect().center) / self.ppu)
@@ -179,7 +218,6 @@ class CarModel:
             pg.draw.line(screen, (50, 50, 50), (x - self.camera_position_smooth.x * self.ppu, 0), (x - self.camera_position_smooth.x * self.ppu, canvas_height))
         for y in range(start_y, stop_y, self.ppu):
             pg.draw.line(screen, (50, 50, 50), (0, y - self.camera_position_smooth.y * self.ppu), (canvas_width, y - self.camera_position_smooth.y * self.ppu))
-
 
     def _draw_car(self, screen):
         # draw rectangle representing car
@@ -281,34 +319,72 @@ class CarModel:
         return vector
 
 
-if __name__ == "__main__":
-    import sys
-    import os
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
-    from config import Config as cfg
+class RenderMode(str, Enum):
+    HUMAN = 'human'
+    
 
-    pg.init()
-    screen = pg.display.set_mode((800, 600))
-    clock = pg.time.Clock()
+class MiniF1RLEnv(gymnasium.Env):
 
-    car = CarModel(0, 0)
-    car.draw_track_projection = True
-    car.draw_trace = True
-    car.draw_tire_trace = True
+    def __init__(self, render_mode: str = RenderMode.HUMAN):
+        # Initialize pygame stuff
+        self.render_mode = render_mode
+        self.screen: pg.Surface|None = None
+        self.clock = None
+        # Initialize car model
+        self.car = CarModel(*CAR_START_POSITION)
+        # self.car.draw_track_projection = True
+        # self.car.draw_trace = True
+        # self.car.draw_tire_trace = True
+        # Initialize environment
+        self.action_space = spaces.Discrete(5) # 0 = nothing, 1 = left, 2 = right, 3 = up, 4 = down
+        self.observation_space = spaces.Box(low=0, high=255, shape=(84, 84, 3), dtype=np.uint8)
 
-    while True:
-        dt = clock.tick(60) / 200.0
+    def init_track_boundaries_from_image(self, image_path):
+        image = np.array(pg.image.load(image_path))
 
+    def step(self, action):
+        dt = 1/60
+        self.car.update(dt)
+        if self.render_mode == RenderMode.HUMAN:
+            self.render()
+
+    def reset(self):
+        self.car = CarModel(*CAR_START_POSITION)
+        return self.car.position
+
+    def render(self, mode=RenderMode.HUMAN):
+        if self.screen is None and mode == RenderMode.HUMAN:
+            pg.init()
+            pg.display.init()
+            self.screen = pg.display.set_mode((800, 600))
+        if self.clock is None:
+            self.clock = pg.time.Clock()
+        self.screen.fill((0, 0, 0))
+        self.car.draw(self.screen, 64)
+        pg.display.flip()
+
+    def close(self):
+        pg.quit()
+
+    def seed(self, seed=None):
+        pass
+
+    def _draw_grid(self, screen):
+        canvas_width = screen.get_width()
+        canvas_height = screen.get_height()
+
+
+
+if __name__ == '__main__':
+    env = MiniF1RLEnv()
+    env.reset()
+    env.render()
+    done = False
+    while not done:
         for event in pg.event.get():
             if event.type == pg.QUIT:
-                pg.quit()
-                sys.exit()
-            
-            if event.type == pg.KEYDOWN and event.key == pg.K_ESCAPE:
-                pg.quit()
-                sys.exit()
-
-        screen.fill((0, 0, 0))
-        car.update(dt)
-        car.draw(screen, 64)
-        pg.display.flip()
+                done = True
+        env.step(0)
+        env.render()
+        env.clock.tick(120)
+    env.close()

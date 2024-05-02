@@ -1,4 +1,6 @@
 
+# This class was implemented for my semesters project 1. (SlamCar) https://github.com/lherrman/slamcar-controller
+
 import json
 class Config:
     @staticmethod
@@ -59,12 +61,12 @@ class Config:
 
 from config import Config as cfg
 
-if __name__ == '__main__':
-    print(cfg.get('controll_frequency'))
-    cfg.set('controll_frequency', 20)
-    groups = cfg.get_groups()
-    keys = cfg.get_keys(groups[0])
-    print(keys)
+# if __name__ == '__main__':
+#     print(cfg.get('controll_frequency'))
+#     cfg.set('controll_frequency', 20)
+#     groups = cfg.get_groups()
+#     keys = cfg.get_keys(groups[0])
+#     print(keys)
 
     
 
