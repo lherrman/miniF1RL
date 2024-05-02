@@ -16,7 +16,9 @@ import numpy as np
 CAR_START_POSITION = (3, 10)
 TRACK_IMAGE_PATH = "track.png"
 
-# Parts of this class are based on the CarModel class i implemented for my semesters project 1. (SlamCar) (base_model.py) https://github.com/lherrman/slamcar-controller
+# Parts of this class are based on the CarModel class i implemented for my semesters project 1. 
+# (SlamCar) (base_model.py) https://github.com/lherrman/slamcar-controller
+
 class CarModel:
     def __init__(self, x, y):
         self.length = 0             # length of the car in meters
@@ -70,7 +72,7 @@ class CarModel:
     def _load_track_boundaries_from_image(self, image_path) -> dict:
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        downsample_rate = 6
+        downsample_rate = 10
         assert len(contours) == 2, "There should be exactly 2 contours in the image"
         inner = contours[0][:, 0, :][::downsample_rate]
         outer = contours[1][:, 0, :][::downsample_rate]
@@ -220,6 +222,17 @@ class CarModel:
 
         # Return the nearest intersection point
         return nearest_intersection
+
+    def _get_neares_point_from_inner_boundary(self, position):
+        # Get the nearest point from the inner boundary
+        nearest_point = None
+        nearest_distance = float('inf')
+        for point in self.track_boundaries['inner']:
+            distance = (position - Vector2(*point)).length()
+            if distance < nearest_distance:
+                nearest_distance = distance
+                nearest_point = Vector2(*point)
+        return nearest_point
 
     def _segment_intersection(self, p1, p2, p3, p4):
         # Function to find the intersection point of two line segments
