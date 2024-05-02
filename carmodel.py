@@ -410,14 +410,21 @@ class MiniF1RLEnv(gymnasium.Env):
     def step(self, action):
         dt = 1/120
 
-        if action == 1:  # Left
-            self.car._update_steering(True, False, dt)
-        elif action == 2:  # Right
-            self.car._update_steering(False, True, dt)
-        elif action == 3:  # Up
-            self.car._update_velocity(True, False, dt)
-        elif action == 4:  # Down
-            self.car._update_velocity(False, True, dt)
+        # Update car model
+        match action:
+            case 0:  # Nothing
+                pass
+            case 1:  # Left
+                self.car._update_steering(True, False, dt)
+            case 2:  # Right
+                self.car._update_steering(False, True, dt)
+            case 3:  # Up
+                self.car._update_velocity(True, False, dt)
+            case 4:  # Down
+                self.car._update_velocity(False, True, dt)
+            case _:
+                raise ValueError(f"Invalid action {action}")
+
     
         self.car.update(dt)
         if self.render_mode == RenderMode.HUMAN:
