@@ -483,5 +483,10 @@ if __name__ == '__main__':
                 done = True
         env.step(0)
         env.render()
+<<<<<<< HEAD:carmodel.py
         env.clock.tick(60)
     env.close()
+=======
+        env.clock.tick(120)
+    env.close()
+>>>>>>> ee8f00bd0f345afc681312ad173a249356bda2b0:minif1env.py
