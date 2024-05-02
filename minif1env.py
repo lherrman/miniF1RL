@@ -17,14 +17,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-CAR_START_POSITION = (3, 10)
+CAR_START_POSITION = (3, 10) # Needs to be adjusted to the track
 TRACK_IMAGE_PATH = "track.png"
 
-# Parts of this class are based on the CarModel class i implemented for my semesters project 1. 
-# (SlamCar) (base_model.py) https://github.com/lherrman/slamcar-controller
+# Parts of this class are based on the CarModel class i implemented for another project (SlamCar)
+# (base_model.py) https://github.com/lherrman/slamcar-controller
 
 class CarModel:
     def __init__(self, x, y):
+        # Car parameters are loaded from the config file
         self.length = 0             # length of the car in meters
         self.width = 0              # width of the car in meters
         self.max_velocity = 0       # meters per second
@@ -33,36 +34,37 @@ class CarModel:
         self.max_steering = 0       # degrees
         self._load_parameters_from_config()
 
+        # Car state
         self.position = Vector2(x, y)                # position in meters
         self.heading = Vector2(0, -1).normalize()    # heading vector
-        self.velocity = Vector2(0.0, 0.0)            # velocity in meters per second
-        self.velocity_magnitude = 0.0                # velocity magnitude in meters per second
+        self.velocity = Vector2(0.0, 0.0)            # velocity
+        self.velocity_magnitude = 0.0                # velocity magnitude
         self.steering = 0.0                          # tire angle in degrees
+        self.collision = False                       # collision flag
 
-        self.rotation_position = -1                  # 1.0 = front, -1.0 = back
-
+        # Camera state
         self.camera_position = Vector2(0, 0) # position of the camera in the world
         self.camera_position_smooth = Vector2(0, 0) # smoothed position of the camera in the world
 
-        self.ppu = 128           # pixels per unit
+        self.ppu = 128 # pixels per unit
 
-        self.trace_tires = [[],[]] # list of points that the tires have passed
-        self.draw_tire_trace = False # draw the track the tires have passed
-
+        # Load track boundaries from image and initialize lidar sensor vectors
         self.track_boundaries = self._get_track_boundaries_from_image(TRACK_IMAGE_PATH)
-        self.collision: bool = False
-        self._init_lidar_sensor_vectors()
+        self._init_lidar_sensor_vectors([-45, 0, 45])
 
-    def _init_lidar_sensor_vectors(self):
-        # Initialize lidar sensor vectors
+    def _init_lidar_sensor_vectors(self, sensor_angles):
         self.lidar_sensor_vectors = []
-        for i in [-45, 0, 45]:
+        for i in sensor_angles:
             angle = math.radians(i)
             self.lidar_sensor_vectors.append(Vector2(math.cos(angle), math.sin(angle)))
         self.lidar_sensor_distances = [0] * len(self.lidar_sensor_vectors)
-        self.current_sensor_vectors = []
+        self.current_sensor_vectors = [] # stores the current sensor vectors rotated according to the car heading
 
     def _get_track_boundaries_from_image(self, image_path) -> dict:
+        '''
+        Using opencv to read the image and find the contours of the track boundaries.
+        The boundaries are represented as list of points. ([x1, y1], [x2, y2], ...)
+        '''
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         assert len(contours) == 2, "There should be exactly 2 contours in the image"
