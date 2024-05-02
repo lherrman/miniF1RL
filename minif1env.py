@@ -105,7 +105,7 @@ class CarModel:
         self.drifting_coefficient = cfg.get("drifting_coefficient") # Currently not used
 
     def update(self, dt):
-        self._update_inputs_human(dt)
+        #self._update_inputs_human(dt)
         self._update_position(dt)
         self._update_lidar_data()
         self._update_track_collision()
@@ -410,24 +410,23 @@ class MiniF1RLEnv(gymnasium.Env):
         # Initialize car model
         self.car = CarModel(*CAR_START_POSITION)
         # Initialize environment
-        self.action_space = spaces.Discrete(5) # 0 = nothing, 1 = left, 2 = right, 3 = up, 4 = down
+        self.action_space = spaces.Discrete(3) # 0 = nothing, 1 = left, 2 = right
         self.observation_space = spaces.Box(low=0, high=100, shape=(3,), dtype=np.float32)
-
 
     def step(self, action):
         dt = 1/60
+
+        # For Simplicity, car will always move forward
+        self.car.update_velocity(True, False, dt)
+
         # Update car model
         match action:
             case 0:  # Nothing
-                pass
+                self.car.update_steering(False, False, dt)
             case 1:  # Left
                 self.car.update_steering(True, False, dt)
             case 2:  # Right
                 self.car.update_steering(False, True, dt)
-            case 3:  # Up
-                self.car.update_velocity(True, False, dt)
-            case 4:  # Down
-                self.car.update_velocity(False, True, dt)
             case _:
                 raise ValueError(f"Invalid action {action}")
             
@@ -475,11 +474,31 @@ if __name__ == '__main__':
     env.reset()
     env.render()
     done = False
+
+    keycontrolls = {"left": False, "right": False}
     while not done:
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 done = True
-        env.step(0)
+            if event.type == pg.KEYDOWN:
+                if event.key == pg.K_a:
+                    keycontrolls["left"] = True
+                if event.key == pg.K_d:
+                    keycontrolls["right"] = True
+            if event.type == pg.KEYUP:
+                if event.key == pg.K_a:
+                    keycontrolls["left"] = False
+                if event.key == pg.K_d:
+                    keycontrolls["right"] = False
+
+        action = 0
+        if keycontrolls["left"]:
+            action = 1
+        if keycontrolls["right"]:
+            action = 2
+
+        print(action)
+        env.step(action)
         env.render()
         env.clock.tick(60)
     env.close()
