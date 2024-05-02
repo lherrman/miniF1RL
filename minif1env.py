@@ -64,11 +64,18 @@ class CarModel:
     def _load_track_boundaries_from_image(self, image_path) -> dict:
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        downsample_rate = 10
         assert len(contours) == 2, "There should be exactly 2 contours in the image"
+
+        # Transform and downsample the contours
+        downsample_rate = 10
         inner = contours[0][:, 0, :][::downsample_rate]
         outer = contours[1][:, 0, :][::downsample_rate]
-        # divide all values by 60 to make suitable for the car model
+
+        # # Append last point to close the loop
+        inner = np.append(inner, [inner[0]], axis=0)
+        outer = np.append(outer, [outer[0]], axis=0)
+
+        # Scale the contours to make suitable for the simulation
         inner, outer = inner / 60, outer / 60
         return {
             'inner': inner,
