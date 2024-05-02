@@ -25,7 +25,7 @@ class CarModel:
         self.acceleration_speed = 0 # meters per second
         self.steering_speed =   0   # degrees per second
         self.max_steering = 0       # degrees
-        self.load_parameters()
+        self._load_parameters()
 
         self.position = Vector2(x, y)                # position in meters
         self.heading = Vector2(0, -1).normalize()    # heading towards the front of the car
@@ -46,15 +46,28 @@ class CarModel:
         self.trace_tires = [[],[]] # list of points that the tires have passed
         self.draw_tire_trace = False # draw the track the tires have passed
 
-        self.track_boundaries = self._load_track_boundaries_from_image("track.png")
+        self.track_boundaries = self._load_track_boundaries_from_image(TRACK_IMAGE_PATH)
+        self.collision: bool = False
+        self._init_lidar_sensor_vectors()
 
-    def update(self, dt):
-        self._update_inputs(dt)
-        self._update_position(dt)
-        self._update_trace()
+    def get_observation(self):
+        # Returns the observation of the car (lidar sensor data)
+        return self.lidar_sensor_distances
+
+    def get_termination(self):
+        # Returns the termination condition of the car (collision)
+        return self.collision
+
+    def _init_lidar_sensor_vectors(self):
+        # Initialize lidar sensor vectors
+        self.lidar_sensor_vectors = []
+        for i in [-45, 0, 45]:
+            angle = math.radians(i)
+            self.lidar_sensor_vectors.append(Vector2(math.cos(angle), math.sin(angle)))
+        self.lidar_sensor_distances = [0] * len(self.lidar_sensor_vectors)
+        self.current_sensor_vectors = []
 
     def _load_track_boundaries_from_image(self, image_path) -> dict:
-        image_path = "track.png"
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         downsample_rate = 6
@@ -68,8 +81,7 @@ class CarModel:
             'outer': outer
         }   
 
-
-    def load_parameters(self):
+    def _load_parameters(self):
         self.length = cfg.get("car_length")
         self.width = cfg.get("car_width")
         self.max_steering = cfg.get("max_steering")
@@ -80,6 +92,12 @@ class CarModel:
         self.slipage_coefficient = cfg.get("slipage_coefficient") # Currently not used
         self.drifting_coefficient = cfg.get("drifting_coefficient") # Currently not used
 
+    def update(self, dt):
+        self._update_inputs(dt)
+        self._update_position(dt)
+        self._update_lidar_data()
+        self._update_track_collision()
+  
     def _update_position(self, dt):
         # Apply steering
         steering_angle = math.radians(self.steering * self.velocity_magnitude * 20)  # Adjust as needed
@@ -145,93 +163,63 @@ class CarModel:
                 self.velocity_magnitude = max(0, self.velocity_magnitude - self.acceleration_speed * dt)
             else:
                 self.velocity_magnitude = min(0, self.velocity_magnitude + self.acceleration_speed * dt)
-        
-    def _update_trace(self):
-        if not hasattr(self, 'temp_trace_counter'):
-            self.temp_trace_counter = 1
-        self.temp_trace_counter += 1
 
-        self.trace.append(self.position)
-
-        # Only update the trace from tires when moving fast enough
-        # and every x frames
-        frame_skip = 1
-        if abs(self.velocity_magnitude) < 0.0 or \
-            self.temp_trace_counter % frame_skip != 0:
-            return
-        
-        angle = -self.heading.angle_to(Vector2(1, 0))
-        tires = [
-            Vector2(-self.length / 2, self.width / 2),
-            Vector2(-self.length / 2, -self.width / 2)
-        ]
-        for i in range(len(tires)):
-            tires[i] = tires[i].rotate(angle)
-            tires[i] += self.position
-            self.trace_tires[i].append(tires[i])
-            
-            if len(self.trace_tires[i]) > 500:
-                for j in range(frame_skip):
-                    self.trace_tires[i].pop(0)
-
-    def draw(self, screen, ppu):
-        self.ppu = ppu
-
-        self._update_camera_position(screen)
-        
-        # raycast from the car to the track boundaries
-        ray = self.heading
-        intersection_point = self._raycast(self.position, ray, 10)
-        if intersection_point is not None:
-            print(intersection_point)
-            pg.draw.line(screen, (0, 255, 0), (self.position - self.camera_position_smooth) * self.ppu, (intersection_point - self.camera_position_smooth) * self.ppu, 1)
-
-        self._draw_grid(screen)
-        self._draw_track_boundaries(screen)
-        self._draw_trace(screen)
-        self._draw_tires(screen)
-        self._draw_car(screen)
-
-    def _draw_track_boundaries(self, screen):
+    def _update_track_collision(self):
+        # Check if the car has collided with the track boundaries
+        self.collision = False
         for boundary in self.track_boundaries.values():
-            # zip shifted versions of the boundaries list to draw lines between the points
-            boundary_points_0 = boundary[:-1]
-            boundary_points_1 = boundary[1:]
-            for p1, p2 in zip(boundary_points_0, boundary_points_1):
-                p1 = Vector2(p1[0], p1[1])
-                p2 = Vector2(p2[0], p2[1])
-                p1 = (p1 - self.camera_position_smooth) * self.ppu
-                p2 = (p2 - self.camera_position_smooth) * self.ppu
-                if (p1.x < -300 or p2.x < -300 or p1.x > screen.get_width() + 300 or
-                    p2.x > screen.get_width()+300 or
-                    p1.y < -300 or p2.y < -300 or p1.y > screen.get_height() + 300 or
-                    p2.y > screen.get_height()+300):
-                    continue
-                pg.draw.line(screen, (255, 0, 0), p1, p2, 2)
+            boundary_points = [Vector2(p[0], p[1]) for p in boundary]
+            hitbox_radius = self.width / 2
+            for boundary_point in boundary_points:
+                distance = (self.position - boundary_point).length()
+                if distance < hitbox_radius:
+                    self.collision = True
+
+    def _update_lidar_data(self):
+        # Update lidar sensor data according to the current position and heading of the car
+        self.current_sensor_vectors = []
+        for i, sensor_vector in enumerate(self.lidar_sensor_vectors):
+            sensor_vector = sensor_vector.rotate(-self.heading.angle_to(Vector2(1, 0)))
+            self.current_sensor_vectors.append(sensor_vector)
+            self.lidar_sensor_distances[i] = self._raycast_distance(self.position, sensor_vector, 50)
+    def _raycast_distance(self, position, direction, max_distance):
+        intersection_point = self._raycast(position, direction, max_distance)
+        if intersection_point is None:
+            return max_distance
+        return (intersection_point - position).length()
 
     def _raycast(self, position, direction, max_distance):
         # Raycast from position in direction for max_distance
         # Return the position of the first intersection with the track boundaries
-        # Implemented by ChatGPT
 
         # Convert position and direction to Vector2
         position = Vector2(position[0], position[1])
         direction = Vector2(direction[0], direction[1]).normalize()
-        
+
+        # Initialize variables to keep track of the nearest intersection point and its distance
+        nearest_intersection = None
+        nearest_distance = float('inf')
+
         # Iterate over each boundary segment
         for boundary in self.track_boundaries.values():
             boundary_points = [Vector2(p[0], p[1]) for p in boundary]
             for i in range(len(boundary_points) - 1):
                 p1 = boundary_points[i]
                 p2 = boundary_points[i + 1]
-                
+
                 # Check if the ray intersects with this line segment
                 intersection_point = self._segment_intersection(position, position + direction * max_distance, p1, p2)
                 if intersection_point is not None:
-                    return intersection_point
-                    
-        # If no intersection is found, return None
-        return None
+                    # Calculate the distance between the position and the intersection point
+                    distance = (intersection_point - position).length()
+
+                    # Update the nearest intersection point if this intersection is closer
+                    if distance < nearest_distance:
+                        nearest_intersection = intersection_point
+                        nearest_distance = distance
+
+        # Return the nearest intersection point
+        return nearest_intersection
 
     def _segment_intersection(self, p1, p2, p3, p4):
         # Function to find the intersection point of two line segments
@@ -262,6 +250,39 @@ class CarModel:
                 return Vector2(x, y)
         else:
             return None  # No intersection
+        
+    def draw(self, screen, ppu):
+        self.ppu = ppu
+
+        self._update_camera_position(screen)
+        self._draw_grid(screen)
+        self._draw_track_boundaries(screen)
+        self._draw_tires(screen)
+        self._draw_lidar(screen)
+        self._draw_car(screen)
+
+    def _draw_lidar(self, screen):
+        for i, sensor_vector in enumerate(self.current_sensor_vectors):
+            start_pos = (self.position - self.camera_position_smooth) * self.ppu
+            end_pos = (self.position + sensor_vector * self.lidar_sensor_distances[i] - self.camera_position_smooth) * self.ppu
+            pg.draw.line(screen, (255, 255, 255), start_pos, end_pos, 1)
+            
+    def _draw_track_boundaries(self, screen):
+        for boundary in self.track_boundaries.values():
+            # zip shifted versions of the boundaries list to draw lines between the points
+            boundary_points_0 = boundary[:-1]
+            boundary_points_1 = boundary[1:]
+            for p1, p2 in zip(boundary_points_0, boundary_points_1):
+                p1 = Vector2(p1[0], p1[1])
+                p2 = Vector2(p2[0], p2[1])
+                p1 = (p1 - self.camera_position_smooth) * self.ppu
+                p2 = (p2 - self.camera_position_smooth) * self.ppu
+                if (p1.x < -300 or p2.x < -300 or p1.x > screen.get_width() + 300 or
+                    p2.x > screen.get_width()+300 or
+                    p1.y < -300 or p2.y < -300 or p1.y > screen.get_height() + 300 or
+                    p2.y > screen.get_height()+300):
+                    continue
+                pg.draw.line(screen, (255, 0, 0), p1, p2, 2)
 
     def _update_camera_position(self, screen):
         self.camera_position = self.position - (Vector2(*screen.get_rect().center) / self.ppu)
@@ -360,22 +381,6 @@ class CarModel:
             points = [p + tire for p in tire_corner_points]
             pg.draw.polygon(screen, (255, 255, 255), points, 2)
 
-    def _draw_trace(self, screen):
-        if self.draw_trace:
-            if len(self.trace) < 2:
-                return
-            points = [p - self.camera_position_smooth for p in self.trace]
-            points = [p * self.ppu for p in points]
-            pg.draw.lines(screen, (100,100,100), False, points, 1)
-            
-        if self.draw_tire_trace:
-            for points in self.trace_tires:
-                if len(points) < 2:
-                    continue
-                points = [p - self.camera_position_smooth for p in points]
-                points = [p * self.ppu for p in points]
-                pg.draw.lines(screen, (50,50,50), False, points, 5)
-
     def _rotate_vector_about_point(self, vector, point, angle):
         """Rotate a vector about a point by a given angle in degrees."""
         vector = vector - point
@@ -383,11 +388,9 @@ class CarModel:
         vector = vector + point
         return vector
 
-
 class RenderMode(str, Enum):
     HUMAN = 'human'
     
-
 class MiniF1RLEnv(gymnasium.Env):
 
     def __init__(self, render_mode: str = RenderMode.HUMAN):
@@ -397,21 +400,29 @@ class MiniF1RLEnv(gymnasium.Env):
         self.clock = None
         # Initialize car model
         self.car = CarModel(*CAR_START_POSITION)
-        # self.car.draw_track_projection = True
-        # self.car.draw_trace = True
-        # self.car.draw_tire_trace = True
         # Initialize environment
         self.action_space = spaces.Discrete(5) # 0 = nothing, 1 = left, 2 = right, 3 = up, 4 = down
-        self.observation_space = spaces.Box(low=0, high=255, shape=(84, 84, 3), dtype=np.uint8)
+        self.observation_space = spaces.Box(low=0, high=100, shape=(3,), dtype=np.float32)
 
     def init_track_boundaries_from_image(self, image_path):
         image = np.array(pg.image.load(image_path))
 
     def step(self, action):
-        dt = 1/60
+        dt = 1/120
+
+        if action == 1:  # Left
+            self.car._update_steering(True, False, dt)
+        elif action == 2:  # Right
+            self.car._update_steering(False, True, dt)
+        elif action == 3:  # Up
+            self.car._update_velocity(True, False, dt)
+        elif action == 4:  # Down
+            self.car._update_velocity(False, True, dt)
+    
         self.car.update(dt)
         if self.render_mode == RenderMode.HUMAN:
             self.render()
+        
 
     def reset(self):
         self.car = CarModel(*CAR_START_POSITION)
@@ -422,6 +433,7 @@ class MiniF1RLEnv(gymnasium.Env):
             pg.init()
             pg.display.init()
             self.screen = pg.display.set_mode((800, 600))
+            pg.display.set_caption("MiniF1RL")
         if self.clock is None:
             self.clock = pg.time.Clock()
         self.screen.fill((0, 0, 0))
@@ -437,8 +449,6 @@ class MiniF1RLEnv(gymnasium.Env):
     def _draw_grid(self, screen):
         canvas_width = screen.get_width()
         canvas_height = screen.get_height()
-
-
 
 if __name__ == '__main__':
     env = MiniF1RLEnv()
