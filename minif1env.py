@@ -1,3 +1,6 @@
+import os
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
+
 from enum import Enum
 from pprint import pprint
 import numpy as np
@@ -13,6 +16,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 CAR_START_POSITION = (3, 10)
 TRACK_IMAGE_PATH = "track.png"
 
@@ -27,10 +31,10 @@ class CarModel:
         self.acceleration_speed = 0 # meters per second
         self.steering_speed =   0   # degrees per second
         self.max_steering = 0       # degrees
-        self._load_parameters()
+        self._load_parameters_from_config()
 
         self.position = Vector2(x, y)                # position in meters
-        self.heading = Vector2(0, -1).normalize()    # heading towards the front of the car
+        self.heading = Vector2(0, -1).normalize()    # heading vector
         self.velocity = Vector2(0.0, 0.0)            # velocity in meters per second
         self.velocity_magnitude = 0.0                # velocity magnitude in meters per second
         self.steering = 0.0                          # tire angle in degrees
@@ -42,13 +46,10 @@ class CarModel:
 
         self.ppu = 128           # pixels per unit
 
-        self.trace = [] # list of points that the car has passed
-        self.draw_trace = True # draw the track the car has passed
-
         self.trace_tires = [[],[]] # list of points that the tires have passed
         self.draw_tire_trace = False # draw the track the tires have passed
 
-        self.track_boundaries = self._load_track_boundaries_from_image(TRACK_IMAGE_PATH)
+        self.track_boundaries = self._get_track_boundaries_from_image(TRACK_IMAGE_PATH)
         self.collision: bool = False
         self._init_lidar_sensor_vectors()
 
@@ -61,7 +62,7 @@ class CarModel:
         self.lidar_sensor_distances = [0] * len(self.lidar_sensor_vectors)
         self.current_sensor_vectors = []
 
-    def _load_track_boundaries_from_image(self, image_path) -> dict:
+    def _get_track_boundaries_from_image(self, image_path) -> dict:
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         assert len(contours) == 2, "There should be exactly 2 contours in the image"
@@ -90,7 +91,7 @@ class CarModel:
         # Returns the termination condition of the car (collision)
         return self.collision
 
-    def _load_parameters(self):
+    def _load_parameters_from_config(self):
         self.length = cfg.get("car_length")
         self.width = cfg.get("car_width")
         self.max_steering = cfg.get("max_steering")
