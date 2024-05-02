@@ -1,4 +1,5 @@
 from enum import Enum
+from pprint import pprint
 import numpy as np
 import math
 import pygame as pg
@@ -56,10 +57,15 @@ class CarModel:
         image_path = "track.png"
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        downsample_rate = 6
         assert len(contours) == 2, "There should be exactly 2 contours in the image"
+        inner = contours[0][:, 0, :][::downsample_rate]
+        outer = contours[1][:, 0, :][::downsample_rate]
+        # divide all values by 60 to make suitable for the car model
+        inner, outer = inner / 60, outer / 60
         return {
-            'inner': contours[0],
-            'outer': contours[1]
+            'inner': inner,
+            'outer': outer
         }   
 
 
@@ -172,6 +178,13 @@ class CarModel:
         self.ppu = ppu
 
         self._update_camera_position(screen)
+        
+        # raycast from the car to the track boundaries
+        ray = self.heading
+        intersection_point = self._raycast(self.position, ray, 10)
+        if intersection_point is not None:
+            print(intersection_point)
+            pg.draw.line(screen, (0, 255, 0), (self.position - self.camera_position_smooth) * self.ppu, (intersection_point - self.camera_position_smooth) * self.ppu, 1)
 
         self._draw_grid(screen)
         self._draw_track_boundaries(screen)
@@ -181,22 +194,74 @@ class CarModel:
 
     def _draw_track_boundaries(self, screen):
         for boundary in self.track_boundaries.values():
-            boundary_points = boundary[:, 0, :]
-            boundary_points = boundary_points[::6] # only use every xth point to improve performance
-
-            # zip shifted versions of the list to draw lines between the points
-            boundary_points_0 = boundary_points[:-1]
-            boundary_points_1 = boundary_points[1:]
+            # zip shifted versions of the boundaries list to draw lines between the points
+            boundary_points_0 = boundary[:-1]
+            boundary_points_1 = boundary[1:]
             for p1, p2 in zip(boundary_points_0, boundary_points_1):
                 p1 = Vector2(p1[0], p1[1])
                 p2 = Vector2(p2[0], p2[1])
-                p1 = p1 - self.camera_position_smooth * self.ppu
-                p2 = p2 - self.camera_position_smooth * self.ppu
-                if p1.x < 0 and p2.x < 0:
-                    continue
-                if p1.y < 0 and p2.y < 0:
+                p1 = (p1 - self.camera_position_smooth) * self.ppu
+                p2 = (p2 - self.camera_position_smooth) * self.ppu
+                if (p1.x < -300 or p2.x < -300 or p1.x > screen.get_width() + 300 or
+                    p2.x > screen.get_width()+300 or
+                    p1.y < -300 or p2.y < -300 or p1.y > screen.get_height() + 300 or
+                    p2.y > screen.get_height()+300):
                     continue
                 pg.draw.line(screen, (255, 0, 0), p1, p2, 2)
+
+    def _raycast(self, position, direction, max_distance):
+        # Raycast from position in direction for max_distance
+        # Return the position of the first intersection with the track boundaries
+        # Implemented by ChatGPT
+
+        # Convert position and direction to Vector2
+        position = Vector2(position[0], position[1])
+        direction = Vector2(direction[0], direction[1]).normalize()
+        
+        # Iterate over each boundary segment
+        for boundary in self.track_boundaries.values():
+            boundary_points = [Vector2(p[0], p[1]) for p in boundary]
+            for i in range(len(boundary_points) - 1):
+                p1 = boundary_points[i]
+                p2 = boundary_points[i + 1]
+                
+                # Check if the ray intersects with this line segment
+                intersection_point = self._segment_intersection(position, position + direction * max_distance, p1, p2)
+                if intersection_point is not None:
+                    return intersection_point
+                    
+        # If no intersection is found, return None
+        return None
+
+    def _segment_intersection(self, p1, p2, p3, p4):
+        # Function to find the intersection point of two line segments
+        # Implemented by ChatGPT
+        def _ccw(A, B, C):
+            return (C.y-A.y) * (B.x-A.x) > (B.y-A.y) * (C.x-A.x)
+
+        def _intersect(A, B, C, D):
+            return _ccw(A,C,D) != _ccw(B,C,D) and _ccw(A,B,C) != _ccw(A,B,D)
+
+        if _intersect(p1, p2, p3, p4):
+            # Calculate the intersection point
+            a1 = p2.y - p1.y
+            b1 = p1.x - p2.x
+            c1 = a1 * p1.x + b1 * p1.y
+            
+            a2 = p4.y - p3.y
+            b2 = p3.x - p4.x
+            c2 = a2 * p3.x + b2 * p3.y
+            
+            det = a1 * b2 - a2 * b1
+            
+            if det == 0:
+                return None  # Parallel lines
+            else:
+                x = (b2 * c1 - b1 * c2) / det
+                y = (a1 * c2 - a2 * c1) / det
+                return Vector2(x, y)
+        else:
+            return None  # No intersection
 
     def _update_camera_position(self, screen):
         self.camera_position = self.position - (Vector2(*screen.get_rect().center) / self.ppu)
