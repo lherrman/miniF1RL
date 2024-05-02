@@ -421,8 +421,7 @@ class MiniF1RLEnv(gymnasium.Env):
         image = np.array(pg.image.load(image_path))
 
     def step(self, action):
-        dt = 1/120
-
+        dt = 1/60
         # Update car model
         match action:
             case 0:  # Nothing
@@ -437,13 +436,14 @@ class MiniF1RLEnv(gymnasium.Env):
                 self.car._update_velocity(False, True, dt)
             case _:
                 raise ValueError(f"Invalid action {action}")
-
-    
+            
+        terminate = self.car.get_termination()
+        observation = self.car.get_observation()
+        
         self.car.update(dt)
         if self.render_mode == RenderMode.HUMAN:
             self.render()
         
-
     def reset(self):
         self.car = CarModel(*CAR_START_POSITION)
         return self.car.position
@@ -454,8 +454,10 @@ class MiniF1RLEnv(gymnasium.Env):
             pg.display.init()
             self.screen = pg.display.set_mode((800, 600))
             pg.display.set_caption("MiniF1RL")
+
         if self.clock is None:
             self.clock = pg.time.Clock()
+
         self.screen.fill((0, 0, 0))
         self.car.draw(self.screen, 64)
         pg.display.flip()
@@ -481,5 +483,5 @@ if __name__ == '__main__':
                 done = True
         env.step(0)
         env.render()
-        env.clock.tick(120)
+        env.clock.tick(60)
     env.close()

@@ -2,9 +2,9 @@
   "base_model": {
     "max_steering": 4,
     "steering_speed": 3,
-    "max_velocity": 4,
-    "acceleration": 0.8,
-    "deceleration": 0.8,
+    "max_velocity": 8,
+    "acceleration": 2,
+    "deceleration": 2,
     "car_length": 0.3,
     "car_width": 0.2,
     "drag_coefficient": 0.3, 
