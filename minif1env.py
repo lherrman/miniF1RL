@@ -52,14 +52,6 @@ class CarModel:
         self.collision: bool = False
         self._init_lidar_sensor_vectors()
 
-    def get_observation(self):
-        # Returns the observation of the car (lidar sensor data)
-        return self.lidar_sensor_distances
-
-    def get_termination(self):
-        # Returns the termination condition of the car (collision)
-        return self.collision
-
     def _init_lidar_sensor_vectors(self):
         # Initialize lidar sensor vectors
         self.lidar_sensor_vectors = []
@@ -82,6 +74,14 @@ class CarModel:
             'inner': inner,
             'outer': outer
         }   
+
+    def get_observation(self):
+        # Returns the observation of the car (lidar sensor data)
+        return self.lidar_sensor_distances
+
+    def get_termination(self):
+        # Returns the termination condition of the car (collision)
+        return self.collision
 
     def _load_parameters(self):
         self.length = cfg.get("car_length")
@@ -169,13 +169,16 @@ class CarModel:
     def _update_track_collision(self):
         # Check if the car has collided with the track boundaries
         self.collision = False
-        for boundary in self.track_boundaries.values():
-            boundary_points = [Vector2(p[0], p[1]) for p in boundary]
-            hitbox_radius = self.width / 2
-            for boundary_point in boundary_points:
-                distance = (self.position - boundary_point).length()
-                if distance < hitbox_radius:
-                    self.collision = True
+        sensors_min = min(self.lidar_sensor_distances)
+        self.collision = sensors_min < 0.2
+        # Somehow not working ATM
+        # for boundary in self.track_boundaries.values():
+        #     boundary_points = [Vector2(p[0], p[1]) for p in boundary]
+        #     hitbox_radius = self.width / 2
+        #     for boundary_point in boundary_points:
+        #         distance = (self.position - boundary_point).length()
+        #         if distance < hitbox_radius:
+        #             self.collision = True
 
     def _update_lidar_data(self):
         # Update lidar sensor data according to the current position and heading of the car
@@ -184,16 +187,22 @@ class CarModel:
             sensor_vector = sensor_vector.rotate(-self.heading.angle_to(Vector2(1, 0)))
             self.current_sensor_vectors.append(sensor_vector)
             self.lidar_sensor_distances[i] = self._raycast_distance(self.position, sensor_vector, 50)
+
     def _raycast_distance(self, position, direction, max_distance):
+        '''
+        Shoot a ray from position in direction for max_distance into the track boundaries
+        Return the distance to the first intersection point
+        '''
         intersection_point = self._raycast(position, direction, max_distance)
         if intersection_point is None:
             return max_distance
         return (intersection_point - position).length()
 
     def _raycast(self, position, direction, max_distance):
-        # Raycast from position in direction for max_distance
-        # Return the position of the first intersection with the track boundaries
-
+        '''
+        Shoot a ray from position in direction for max_distance into the track boundaries
+        Return the intersection point
+        '''
         # Convert position and direction to Vector2
         position = Vector2(position[0], position[1])
         direction = Vector2(direction[0], direction[1]).normalize()
@@ -278,7 +287,7 @@ class CarModel:
         for i, sensor_vector in enumerate(self.current_sensor_vectors):
             start_pos = (self.position - self.camera_position_smooth) * self.ppu
             end_pos = (self.position + sensor_vector * self.lidar_sensor_distances[i] - self.camera_position_smooth) * self.ppu
-            pg.draw.line(screen, (255, 255, 255), start_pos, end_pos, 1)
+            pg.draw.line(screen, (0, 255, 0), start_pos, end_pos, 1)
             
     def _draw_track_boundaries(self, screen):
         for boundary in self.track_boundaries.values():
@@ -438,6 +447,10 @@ class MiniF1RLEnv(gymnasium.Env):
                 raise ValueError(f"Invalid action {action}")
             
         terminate = self.car.get_termination()
+
+        if terminate:
+            self.reset()
+
         observation = self.car.get_observation()
         
         self.car.update(dt)
@@ -483,10 +496,5 @@ if __name__ == '__main__':
                 done = True
         env.step(0)
         env.render()
-<<<<<<< HEAD:carmodel.py
         env.clock.tick(60)
     env.close()
-=======
-        env.clock.tick(120)
-    env.close()
->>>>>>> ee8f00bd0f345afc681312ad173a249356bda2b0:minif1env.py
