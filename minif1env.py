@@ -44,6 +44,7 @@ class CarModel:
         self.collision = False                       # collision flag
         self.controlls_buffer = {"left": False, "right": False, "up": False, "down": False, "boost": False}
         self.progress = 0.0                          # progress of the car on the track
+        self.last_progress = 0.0                     # last progress of the car on the track
 
         # Camera state
         self.camera_position = Vector2(0, 0) # position of the camera in the world
@@ -97,6 +98,32 @@ class CarModel:
     def get_termination(self):
         # Returns the termination condition of the car (collision or reaching the end of the track)
         return self.collision or self.progress > 0.99
+
+    def get_reward(self):
+        
+        progress_diff_reward = self.progress - self.last_progress
+
+        speed_reward = self.velocity_magnitude / self.max_velocity
+
+        finish_reward = 1 if self.progress > 0.99 else 0
+
+        collision_reward = 1 if self.collision else 0
+
+        # Weight factors
+        W1_progress = 1
+        W2_speed = 1
+        W3_finish = 20
+        W4_collision = -20
+
+        reward = (
+                  W1_progress * progress_diff_reward + 
+                  W2_speed * speed_reward + 
+                  W3_finish * finish_reward + 
+                  W4_collision * collision_reward
+                  )
+
+        self.last_progress = self.progress
+        return reward
 
     def _load_parameters_from_config(self):
         self.length = cfg.get("car_length")
@@ -459,12 +486,11 @@ class CarModel:
             points = [p + tire for p in tire_corner_points]
             pg.draw.polygon(screen, (255, 255, 255), points, 2)
 
-class RenderMode(str, Enum):
-    HUMAN = 'human'
+
     
 class MiniF1RLEnv(gymnasium.Env):
 
-    def __init__(self, render_mode: str = RenderMode.HUMAN):
+    def __init__(self, render_mode: str = 'human'):
         # Initialize pygame stuff
         self.render_mode = render_mode
         self.screen: pg.Surface|None = None
@@ -474,46 +500,59 @@ class MiniF1RLEnv(gymnasium.Env):
         # Initialize environment
         self.action_space = spaces.Discrete(3) # 0 = nothing, 1 = left, 2 = right, 3 = boost
         self.observation_space = spaces.Box(low=0, high=100, shape=(3,), dtype=np.float32)
+        self.reward = 0
+        self.prev_reward = 0
 
     def step(self, action):
         dt = 1/60
 
-        # For Simplicity, car will always move forward
+        # For simplicity, car will always accelerate
 
         # Update car model
-        match action:
-            case 0:  # Nothing
-                self.car.update_velocity(True, False, False, dt)
-                self.car.update_steering(False, False, dt)
-            case 1:  # Left
-                self.car.update_velocity(True, False, False, dt)
-                self.car.update_steering(True, False, dt)
-            case 2:  # Right
-                self.car.update_steering(False, True, dt)
-                self.car.update_velocity(True, False, False, dt)
-            case 3:  # Boost
-                self.car.update_velocity(True, False, True, dt)
-                self.car.update_steering(False, False, dt)
-            case _:
-                raise ValueError(f"Invalid action {action}")
+        if action is not None:
+            match action:
+                case 0:  # Nothing
+                    self.car.update_velocity(True, False, False, dt)
+                    self.car.update_steering(False, False, dt)
+                case 1:  # Left
+                    self.car.update_velocity(True, False, False, dt)
+                    self.car.update_steering(True, False, dt)
+                case 2:  # Right
+                    self.car.update_steering(False, True, dt)
+                    self.car.update_velocity(True, False, False, dt)
+                case 3:  # Boost
+                    self.car.update_velocity(True, False, True, dt)
+                    self.car.update_steering(False, False, dt)
+                case _:
+                    raise ValueError(f"Invalid action {action}")
             
         terminate = self.car.get_termination()
-
-        if terminate:
-            self.reset()
-
         observation = self.car.get_observation()
-        
-        self.car.update(dt)
-        if self.render_mode == RenderMode.HUMAN:
-            self.render()
-        
-    def reset(self):
-        self.car = CarModel(*CAR_START_POSITION)
-        return self.car.position
 
-    def render(self, mode=RenderMode.HUMAN):
-        if self.screen is None and mode == RenderMode.HUMAN:
+        step_reward = self.car.get_reward()
+
+        if action is not None:
+            self.reward -= 0.1 # reward discount
+
+        self.car.update(dt)
+        if self.render_mode == 'human':
+            self.render()
+
+        return observation, step_reward, terminate, {}, {}
+        
+    def reset(self, **kwargs):
+        super().reset(**kwargs)
+        self.reward = 0
+        self.prev_reward = 0
+        self.car = CarModel(*CAR_START_POSITION)
+
+        if self.render_mode == 'human':
+            self.render()
+
+        return self.step(None)[0], {}
+
+    def render(self, mode='human'):
+        if self.screen is None and mode == 'human':
             pg.init()
             pg.display.init()
             self.screen = pg.display.set_mode((800, 600))
@@ -523,6 +562,7 @@ class MiniF1RLEnv(gymnasium.Env):
             self.clock = pg.time.Clock()
 
         self.screen.fill((0, 0, 0))
+        self.clock.tick(60)
         self.car.draw(self.screen, 64)
         pg.display.flip()
 
@@ -531,10 +571,6 @@ class MiniF1RLEnv(gymnasium.Env):
 
     def seed(self, seed=None):
         pass
-
-    def _draw_grid(self, screen):
-        canvas_width = screen.get_width()
-        canvas_height = screen.get_height()
 
 if __name__ == '__main__':
     env = MiniF1RLEnv()
