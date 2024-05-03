@@ -64,9 +64,17 @@ class CarModel:
         self.W4_collision = -100
 
     def reset(self, randomize=True):
-        random_degree = np.random.uniform(-5, 5) if randomize else 0
-        self.position = Vector2(*CAR_START_POSITION)
-        self.heading = Vector2(0, -1).normalize().rotate(random_degree)
+        
+        random_inner_boundary_index = np.random.randint(1, len(self.track_boundaries['inner']) - 1)
+        p1 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index - 1])
+        p2 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index])
+        p1top2 = p2 - p1
+        nearest_point_on_outer_boundary = self._get_neares_point_from_boundary(p1, boundary='outer')
+        p1_to_nearest_outer = nearest_point_on_outer_boundary - p1
+        start_position = p1 + (p1_to_nearest_outer / 2)
+
+        self.position = start_position
+        self.heading = -p1top2
         self.velocity = Vector2(0.0, 0.0)
         self.velocity_magnitude = 0.0
         self.steering = 0.0
