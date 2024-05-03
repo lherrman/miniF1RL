@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-CAR_START_POSITION = (3, 10) # Needs to be adjusted to the track
+CAR_START_POSITION = (3.5, 10) # Needs to be adjusted to the track
 TRACK_IMAGE_PATH = "track.png"
 
 # Parts of this class are based on the CarModel class i implemented for another project (SlamCar)
@@ -64,18 +64,9 @@ class CarModel:
         self.W4_collision = -100
 
     def reset(self, randomize=True):
-        if randomize:
-            # Randomize the position of the car
-            random_inner_boundary_index = np.random.randint(1, len(self.track_boundaries['inner']) - 1)
-            point_1 = self.track_boundaries['inner'][random_inner_boundary_index - 1]
-            point_2 = self.track_boundaries['inner'][random_inner_boundary_index]
-            heading = vector = Vector2(*point_2) - Vector2(*point_1)
-            perpendicular = heading.rotate(90).normalize()
-            start_position = Vector2(*point_1) + perpendicular * 2
-
-
+        random_degree = np.random.uniform(-5, 5) if randomize else 0
         self.position = Vector2(*CAR_START_POSITION)
-        self.heading = Vector2(0, -1).normalize()
+        self.heading = Vector2(0, -1).normalize().rotate(random_degree)
         self.velocity = Vector2(0.0, 0.0)
         self.velocity_magnitude = 0.0
         self.steering = 0.0
@@ -186,7 +177,6 @@ class CarModel:
         index = np.where(np.all(self.progress_boundary == nearest_point, axis=1))[0][0]
         progress = index / len(self.progress_boundary)
         self.progress = progress
-        print(f"Progress: {progress}")
   
     def _update_position(self, dt):
         # Apply steering
@@ -532,7 +522,7 @@ class MiniF1RLEnv(gymnasium.Env):
         self.prev_reward = 0
 
     def step(self, action):
-        dt = 1/60
+        dt = 1/30
 
         # For simplicity, car will always accelerate
 
@@ -581,7 +571,6 @@ class MiniF1RLEnv(gymnasium.Env):
         return self.step(None)[0], {}
 
     def render(self, mode='human'):
-        print("Rendering")
         if self.screen is None and mode == 'human':
             pg.init()
             pg.display.init()
@@ -592,7 +581,7 @@ class MiniF1RLEnv(gymnasium.Env):
             self.clock = pg.time.Clock()
 
         self.screen.fill((0, 0, 0))
-        self.clock.tick(60)
+        #self.clock.tick(60)
         self.car.draw(self.screen, 64)
         pg.display.flip()
 
