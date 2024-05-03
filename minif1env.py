@@ -154,20 +154,26 @@ class CarModel:
             else:
                 self.steering = min(0, self.steering + self.steering_speed * dt * back_steer_factor)
         
-    def update_velocity(self, up, down, dt):
+    def update_velocity(self, up: bool, down: bool, boost: bool, dt: float):
+        # Boost increases the max velocity and acceleration speed
+        max_velocity = self.max_velocity if not boost else self.max_velocity * 3
+        acceleration_speed = self.acceleration_speed if not boost else self.acceleration_speed * 3
+
+        # Update velocity
         if up:
-            self.velocity_magnitude = min(self.max_velocity, 
-                                          self.velocity_magnitude + self.acceleration_speed * dt)
+            self.velocity_magnitude = min(max_velocity, 
+                                          self.velocity_magnitude + acceleration_speed * dt)
         if down:
             self.velocity_magnitude = max(0, 
-                                          self.velocity_magnitude - self.acceleration_speed * dt)
+                                          self.velocity_magnitude - acceleration_speed * dt)
             
         # If neither is pressed, reduce velocity to 0
-        if not up and not down:
+        if not up and not down and not boost:
             if self.velocity_magnitude > 0:
                 self.velocity_magnitude = max(0, self.velocity_magnitude - self.acceleration_speed * dt)
             else:
                 self.velocity_magnitude = min(0, self.velocity_magnitude + self.acceleration_speed * dt)
+
 
     def _update_track_collision(self):
         '''Check if the car is colliding with the track boundaries'''
@@ -410,23 +416,28 @@ class MiniF1RLEnv(gymnasium.Env):
         # Initialize car model
         self.car = CarModel(*CAR_START_POSITION)
         # Initialize environment
-        self.action_space = spaces.Discrete(3) # 0 = nothing, 1 = left, 2 = right
+        self.action_space = spaces.Discrete(3) # 0 = nothing, 1 = left, 2 = right, 3 = boost
         self.observation_space = spaces.Box(low=0, high=100, shape=(3,), dtype=np.float32)
 
     def step(self, action):
         dt = 1/60
 
         # For Simplicity, car will always move forward
-        self.car.update_velocity(True, False, dt)
 
         # Update car model
         match action:
             case 0:  # Nothing
+                self.car.update_velocity(True, False, False, dt)
                 self.car.update_steering(False, False, dt)
             case 1:  # Left
+                self.car.update_velocity(True, False, False, dt)
                 self.car.update_steering(True, False, dt)
             case 2:  # Right
                 self.car.update_steering(False, True, dt)
+                self.car.update_velocity(True, False, False, dt)
+            case 3:  # Boost
+                self.car.update_velocity(True, False, True, dt)
+                self.car.update_steering(False, False, dt)
             case _:
                 raise ValueError(f"Invalid action {action}")
             
@@ -475,27 +486,36 @@ if __name__ == '__main__':
     env.render()
     done = False
 
-    keycontrolls = {"left": False, "right": False}
+    keycontrolls = {"left": False, "right": False, "boost": False}
     while not done:
+
+        # Update controlls
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 done = True
-            if event.type == pg.KEYDOWN:
+
+            elif event.type == pg.KEYDOWN:
                 if event.key == pg.K_a:
                     keycontrolls["left"] = True
-                if event.key == pg.K_d:
+                elif event.key == pg.K_d:
                     keycontrolls["right"] = True
-            if event.type == pg.KEYUP:
+                elif event.key == pg.K_w:
+                    keycontrolls["boost"] = True
+            elif event.type == pg.KEYUP:
                 if event.key == pg.K_a:
                     keycontrolls["left"] = False
-                if event.key == pg.K_d:
+                elif event.key == pg.K_d:
                     keycontrolls["right"] = False
+                elif event.key == pg.K_w:
+                    keycontrolls["boost"] = False
 
         action = 0
         if keycontrolls["left"]:
             action = 1
         if keycontrolls["right"]:
             action = 2
+        if keycontrolls["boost"]:
+            action = 3
 
         print(action)
         env.step(action)
