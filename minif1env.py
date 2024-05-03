@@ -57,12 +57,38 @@ class CarModel:
         self.progress_boundary = self._calculate_track_progress_boundary() # Used to calculate the progress of the car
         self._init_lidar_sensor_vectors([-45, 0, 45])
 
+        # Reward Weights
+        self.W1_progress = 1000
+        self.W2_speed = 1.0
+        self.W3_finish = 100
+        self.W4_collision = -100
+
+    def reset(self, randomize=True):
+        if randomize:
+            # Randomize the position of the car
+            random_inner_boundary_index = np.random.randint(1, len(self.track_boundaries['inner']) - 1)
+            point_1 = self.track_boundaries['inner'][random_inner_boundary_index - 1]
+            point_2 = self.track_boundaries['inner'][random_inner_boundary_index]
+            heading = vector = Vector2(*point_2) - Vector2(*point_1)
+            perpendicular = heading.rotate(90).normalize()
+            start_position = Vector2(*point_1) + perpendicular * 2
+
+
+        self.position = Vector2(*CAR_START_POSITION)
+        self.heading = Vector2(0, -1).normalize()
+        self.velocity = Vector2(0.0, 0.0)
+        self.velocity_magnitude = 0.0
+        self.steering = 0.0
+        self.collision = False
+        self.progress = 0.0
+        self.last_progress = 0.0
+
     def _init_lidar_sensor_vectors(self, sensor_angles):
         self.lidar_sensor_vectors = []
         for i in sensor_angles:
             angle = math.radians(i)
             self.lidar_sensor_vectors.append(Vector2(math.cos(angle), math.sin(angle)))
-        self.lidar_sensor_distances = [0] * len(self.lidar_sensor_vectors)
+        self.lidar_sensor_distances = [0.0] * len(self.lidar_sensor_vectors)
         self.current_sensor_vectors = [] # stores the current sensor vectors rotated according to the car heading
 
     def _get_track_boundaries_from_image(self, image_path) -> dict:
@@ -109,18 +135,19 @@ class CarModel:
 
         collision_reward = 1 if self.collision else 0
 
-        # Weight factors
-        W1_progress = 1
-        W2_speed = 1
-        W3_finish = 20
-        W4_collision = -20
-
+        weighted_progress_diff_reward = self.W1_progress * progress_diff_reward
+        weighted_speed_reward = self.W2_speed * speed_reward
+        weighted_finish_reward = self.W3_finish * finish_reward
+        weighted_collision_reward = self.W4_collision * collision_reward
         reward = (
-                  W1_progress * progress_diff_reward + 
-                  W2_speed * speed_reward + 
-                  W3_finish * finish_reward + 
-                  W4_collision * collision_reward
+                    weighted_progress_diff_reward +
+                    weighted_speed_reward +
+                    weighted_finish_reward +
+                    weighted_collision_reward
                   )
+
+        # Update the last progress
+        #print(f'Progress: {weighted_progress_diff_reward}, Speed: {weighted_speed_reward}, Finish: {weighted_finish_reward}, Collision: {weighted_collision_reward}, Total: {reward}')
 
         self.last_progress = self.progress
         return reward
@@ -141,7 +168,7 @@ class CarModel:
         # calculate the index from the inner boundary that is closest to the start position
         inner_boundary = self.track_boundaries['inner']
         start_point = Vector2(*CAR_START_POSITION)
-        start_point = self._get_neares_point_from_inner_boundary(start_point)
+        start_point = self._get_neares_point_from_boundary(start_point, boundary='inner')
         start_index = np.where(np.all(inner_boundary == start_point, axis=1))[0][0]
         progress_boundary = np.roll(inner_boundary, -start_index-1, axis=0)
         progress_boundary = progress_boundary[::-1] # reverse the array
@@ -155,10 +182,11 @@ class CarModel:
         self._calculate_track_progress()
   
     def _calculate_track_progress(self):
-        nearest_point = self._get_neares_point_from_inner_boundary(self.position)
+        nearest_point = self._get_neares_point_from_boundary(self.position)
         index = np.where(np.all(self.progress_boundary == nearest_point, axis=1))[0][0]
         progress = index / len(self.progress_boundary)
         self.progress = progress
+        print(f"Progress: {progress}")
   
     def _update_position(self, dt):
         # Apply steering
@@ -297,12 +325,12 @@ class CarModel:
         # Return the nearest intersection point
         return nearest_intersection
 
-    def _get_neares_point_from_inner_boundary(self, position):
+    def _get_neares_point_from_boundary(self, position, boundary='inner'):
         # Get the nearest point from the inner boundary
         # Implemented by ChatGPT
         nearest_point = None
         nearest_distance = float('inf')
-        for point in self.track_boundaries['inner']:
+        for point in self.track_boundaries[boundary]:
             distance = (position - Vector2(*point)).length()
             if distance < nearest_distance:
                 nearest_distance = distance
@@ -536,7 +564,7 @@ class MiniF1RLEnv(gymnasium.Env):
 
         self.car.update(dt)
         if self.render_mode == 'human':
-            self.render()
+            ...#self.render()
 
         return observation, step_reward, terminate, {}, {}
         
@@ -544,7 +572,8 @@ class MiniF1RLEnv(gymnasium.Env):
         super().reset(**kwargs)
         self.reward = 0
         self.prev_reward = 0
-        self.car = CarModel(*CAR_START_POSITION)
+
+        self.car.reset()
 
         if self.render_mode == 'human':
             self.render()
@@ -552,6 +581,7 @@ class MiniF1RLEnv(gymnasium.Env):
         return self.step(None)[0], {}
 
     def render(self, mode='human'):
+        print("Rendering")
         if self.screen is None and mode == 'human':
             pg.init()
             pg.display.init()
@@ -566,8 +596,18 @@ class MiniF1RLEnv(gymnasium.Env):
         self.car.draw(self.screen, 64)
         pg.display.flip()
 
+    def get_reward_weights(self):
+        return {
+            "W1_progress": self.car.W1_progress,
+            "W2_speed": self.car.W2_speed,
+            "W3_finish": self.car.W3_finish,
+            "W4_collision": self.car.W4_collision
+        }
+
     def close(self):
+        pg.display.quit()
         pg.quit()
+        
 
     def seed(self, seed=None):
         pass
@@ -611,5 +651,4 @@ if __name__ == '__main__':
 
         env.step(action)
         env.render()
-        env.clock.tick(60)
     env.close()
