@@ -32,6 +32,7 @@ class CarModel:
         self.acceleration_speed = 0 # meters per second
         self.steering_speed =   0   # degrees per second
         self.max_steering = 0       # degrees
+        self.boost_factor = 0       # boost factor
         self._load_parameters_from_config()
 
         # Car state
@@ -41,6 +42,8 @@ class CarModel:
         self.velocity_magnitude = 0.0                # velocity magnitude
         self.steering = 0.0                          # tire angle in degrees
         self.collision = False                       # collision flag
+        self.controlls_buffer = {"left": False, "right": False, "up": False, "down": False, "boost": False}
+        self.progress = 0.0                          # progress of the car on the track
 
         # Camera state
         self.camera_position = Vector2(0, 0) # position of the camera in the world
@@ -50,6 +53,7 @@ class CarModel:
 
         # Load track boundaries from image and initialize lidar sensor vectors
         self.track_boundaries = self._get_track_boundaries_from_image(TRACK_IMAGE_PATH)
+        self.progress_boundary = self._calculate_track_progress_boundary() # Used to calculate the progress of the car
         self._init_lidar_sensor_vectors([-45, 0, 45])
 
     def _init_lidar_sensor_vectors(self, sensor_angles):
@@ -71,18 +75,19 @@ class CarModel:
 
         # Transform and downsample the contours
         downsample_rate = 10
-        inner = contours[0][:, 0, :][::downsample_rate]
-        outer = contours[1][:, 0, :][::downsample_rate]
+        inner_boundary = contours[0][:, 0, :][::downsample_rate]
+        outer_boundary = contours[1][:, 0, :][::downsample_rate]
 
         # # Append last point to close the loop
-        inner = np.append(inner, [inner[0]], axis=0)
-        outer = np.append(outer, [outer[0]], axis=0)
+        inner_boundary = np.append(inner_boundary, [inner_boundary[0]], axis=0)
+        outer_boundary = np.append(outer_boundary, [outer_boundary[0]], axis=0)
 
         # Scale the contours to make suitable for the simulation
-        inner, outer = inner / 60, outer / 60
+        inner_boundary, outer_boundary = inner_boundary / 60, outer_boundary / 60
+
         return {
-            'inner': inner,
-            'outer': outer
+            'inner': inner_boundary,
+            'outer': outer_boundary
         }   
 
     def get_observation(self):
@@ -90,8 +95,8 @@ class CarModel:
         return self.lidar_sensor_distances
 
     def get_termination(self):
-        # Returns the termination condition of the car (collision)
-        return self.collision
+        # Returns the termination condition of the car (collision or reaching the end of the track)
+        return self.collision or self.progress > 0.99
 
     def _load_parameters_from_config(self):
         self.length = cfg.get("car_length")
@@ -100,19 +105,38 @@ class CarModel:
         self.max_velocity = cfg.get("max_velocity")
         self.acceleration_speed = cfg.get("acceleration")
         self.steering_speed = cfg.get("steering_speed")
+        self.boost_factor = cfg.get("boost_factor")
         self.drag_coefficient = cfg.get("drag_coefficient") # Currently not used
         self.slipage_coefficient = cfg.get("slipage_coefficient") # Currently not used
         self.drifting_coefficient = cfg.get("drifting_coefficient") # Currently not used
+
+    def _calculate_track_progress_boundary(self):
+        # calculate the index from the inner boundary that is closest to the start position
+        inner_boundary = self.track_boundaries['inner']
+        start_point = Vector2(*CAR_START_POSITION)
+        start_point = self._get_neares_point_from_inner_boundary(start_point)
+        start_index = np.where(np.all(inner_boundary == start_point, axis=1))[0][0]
+        progress_boundary = np.roll(inner_boundary, -start_index-1, axis=0)
+        progress_boundary = progress_boundary[::-1] # reverse the array
+        return progress_boundary
 
     def update(self, dt):
         #self._update_inputs_human(dt)
         self._update_position(dt)
         self._update_lidar_data()
         self._update_track_collision()
+        self._calculate_track_progress()
+  
+    def _calculate_track_progress(self):
+        nearest_point = self._get_neares_point_from_inner_boundary(self.position)
+        index = np.where(np.all(self.progress_boundary == nearest_point, axis=1))[0][0]
+        progress = index / len(self.progress_boundary)
+        self.progress = progress
   
     def _update_position(self, dt):
         # Apply steering
         steering_angle = math.radians(self.steering * self.velocity_magnitude * 20)  # Adjust as needed
+
         self.heading = self.heading.rotate(steering_angle)
 
         # Apply drag
@@ -153,6 +177,10 @@ class CarModel:
                 self.steering = max(0, self.steering - self.steering_speed * dt * back_steer_factor)
             else:
                 self.steering = min(0, self.steering + self.steering_speed * dt * back_steer_factor)
+
+        # Write controlls buffer
+        self.controlls_buffer["left"] = left
+        self.controlls_buffer["right"] = right
         
     def update_velocity(self, up: bool, down: bool, boost: bool, dt: float):
         # Boost increases the max velocity and acceleration speed
@@ -174,6 +202,10 @@ class CarModel:
             else:
                 self.velocity_magnitude = min(0, self.velocity_magnitude + self.acceleration_speed * dt)
 
+        # Write controlls buffer
+        self.controlls_buffer["up"] = up
+        self.controlls_buffer["down"] = down
+        self.controlls_buffer["boost"] = boost
 
     def _update_track_collision(self):
         '''Check if the car is colliding with the track boundaries'''
@@ -289,7 +321,31 @@ class CarModel:
         self._draw_tires(screen)
         self._draw_lidar(screen)
         self._draw_car(screen)
+        self._draw_controls(screen)
 
+    def _draw_controls(self, screen):
+        font = pg.font.Font(None, 24)
+        text = font.render(f"Steering: {self.steering:.2f}", True, (255, 255, 255))
+        screen.blit(text, (10, 10))
+        text = font.render(f"Velocity: {self.velocity_magnitude:.2f}", True, (255, 255, 255))
+        screen.blit(text, (10, 30))
+        # draw the 3 lidar sensor distances
+        for i, distance in enumerate(self.lidar_sensor_distances):
+            text = font.render(f"Sensor {i}: {distance:.2f}", True, (255, 255, 255))
+            screen.blit(text, (10, 50 + 20 * i))
+
+        # draw the controlls left right and boost as rectagles that change color when pressed.
+        # the buttons should be alligned susch as the left right and up arrow key on a keyboard
+        left_color = (255, 255, 255) if self.controlls_buffer["left"] else (100, 100, 100)
+        right_color = (255, 255, 255) if self.controlls_buffer["right"] else (100, 100, 100)
+        boost_color = (255, 255, 255) if self.controlls_buffer["boost"] else (100, 100, 100)
+        width = 50
+        top_left = (20, screen.get_height() - 80)
+        pg.draw.rect(screen, left_color, pg.Rect(top_left, (width, width)))
+        pg.draw.rect(screen, right_color, pg.Rect((top_left[0] + width*2, top_left[1]), (width, width)))
+        pg.draw.rect(screen, boost_color, pg.Rect((top_left[0] + width, top_left[1] - width), (width, width)))
+
+                                                  
     def _draw_lidar(self, screen):
         for i, sensor_vector in enumerate(self.current_sensor_vectors):
             start_pos = (self.position - self.camera_position_smooth) * self.ppu
@@ -517,7 +573,6 @@ if __name__ == '__main__':
         if keycontrolls["boost"]:
             action = 3
 
-        print(action)
         env.step(action)
         env.render()
         env.clock.tick(60)
