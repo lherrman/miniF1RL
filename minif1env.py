@@ -82,6 +82,8 @@ class CarModel:
         self.progress = 0.0
         self.last_progress = 0.0
 
+        self.progress_boundary = self._calculate_track_progress_boundary()
+
     def _init_lidar_sensor_vectors(self, sensor_angles):
         self.lidar_sensor_vectors = []
         for i in sensor_angles:
