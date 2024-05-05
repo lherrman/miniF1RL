@@ -5,7 +5,7 @@
     "max_velocity": 16,
     "acceleration": 3,
     "deceleration": 2,
-    "car_length": 0.4,
+    "car_length": 0.35,
     "car_width": 0.2,
     "boost_factor": 3,
     "drag_coefficient": 0.3, 

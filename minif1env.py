@@ -66,6 +66,10 @@ class CarModel:
         self.W3_finish = 100
         self.W4_collision = -200
 
+    def set_track(self, track_image_path):
+        self.track_boundaries = self._get_track_boundaries_from_image(track_image_path)
+        self.progress_boundary = self._calculate_track_progress_boundary()
+
     def reset(self, randomize=True):
         
         random_inner_boundary_index = np.random.randint(1, len(self.track_boundaries['inner']) - 1)
@@ -127,11 +131,14 @@ class CarModel:
         return np.array(self.lidar_sensor_distances + [self.steering])
 
     def get_termination(self):
-        # Returns the termination condition of the car (collision or reaching the end of the track)
         car_invalid_position = (not self.valid_position_bbox[0][0] < self.position.x < self.valid_position_bbox[0][1] 
                                 or not self.valid_position_bbox[1][0] < self.position.y < self.valid_position_bbox[1][1])
-        return self.collision or self.progress > 0.99 or car_invalid_position
+        return self.collision or car_invalid_position
 
+    def get_truncate(self):
+        # Returns the termination condition of the car (collision or reaching the end of the track)
+        return self.progress > 0.99
+    
     def get_reward(self):
         
         progress_diff_reward = self.progress - self.last_progress
@@ -524,13 +531,14 @@ class CarModel:
     
 class MiniF1RLEnv(gymnasium.Env):
 
-    def __init__(self, render_mode: str = 'human'):
+    def __init__(self, render_mode: str = 'human', track_image_path: str = TRACK_IMAGE_PATH):
         # Initialize pygame stuff
         self.render_mode = render_mode
         self.screen: pg.Surface|None = None
         self.clock = pg.time.Clock()
         # Initialize car model
         self.car_model = CarModel(*CAR_START_POSITION)
+        self.car_model.set_track(track_image_path)
         # Initialize environment
         # Actions: 0 = nothing, 1 = left, 2 = right, 3 = boost
         self.action_space = spaces.Discrete(4) 
@@ -566,13 +574,14 @@ class MiniF1RLEnv(gymnasium.Env):
                     raise ValueError(f"Invalid action {action}")
             
         terminate = self.car_model.get_termination()
+        truncate = self.car_model.get_truncate()
         observation = self.car_model.get_observation()
         step_reward = self.car_model.get_reward()
         if action is not None:
             self.reward -= 0.1 
 
         self.car_model.update(dt)
-        return observation, step_reward, terminate, {}, {}
+        return observation, step_reward, terminate, truncate, {}
         
     def reset(self, **kwargs):
         super().reset(**kwargs)
@@ -617,9 +626,6 @@ class MiniF1RLEnv(gymnasium.Env):
 
 if __name__ == '__main__':
     env = MiniF1RLEnv()
-
-    # For manual play reduce steering speed
-    env.car_model.steering_speed *= 0.5
 
     pg.init()
 
