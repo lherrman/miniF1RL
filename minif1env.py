@@ -57,6 +57,7 @@ class CarModel:
         self.progress_boundary = self._calculate_track_progress_boundary() # Used to calculate the progress of the car
         self._init_lidar_sensor_vectors([-45, 0, 45])
         self.lidar_max_distance = 50
+        self.valid_position_bbox = ((-50, 50), (-50, 50))
 
         # Reward Weights
         self.W1_progress = 1000
@@ -126,7 +127,10 @@ class CarModel:
 
     def get_termination(self):
         # Returns the termination condition of the car (collision or reaching the end of the track)
-        return self.collision or self.progress > 0.99
+        car_invalid_position = (not self.valid_position_bbox[0][0] < self.position.x < self.valid_position_bbox[0][1] 
+                                or not self.valid_position_bbox[1][0] < self.position.y < self.valid_position_bbox[1][1])
+        print(car_invalid_position)
+        return self.collision or self.progress > 0.99 or car_invalid_position
 
     def get_reward(self):
         
@@ -527,7 +531,7 @@ class MiniF1RLEnv(gymnasium.Env):
         # Initialize car model
         self.car_model = CarModel(*CAR_START_POSITION)
         # Initialize environment
-        self.action_space = spaces.Discrete(3) # 0 = nothing, 1 = left, 2 = right, 3 = boost
+        self.action_space = spaces.Discrete(4) # 0 = nothing, 1 = left, 2 = right, 3 = boost
         self.observation_space = spaces.Box(low=0, high=100, shape=(3,), dtype=np.float32)
         self.reward = 0
         self.prev_reward = 0
@@ -556,7 +560,7 @@ class MiniF1RLEnv(gymnasium.Env):
         terminate = self.car_model.get_termination()
         observation = self.car_model.get_observation()
         step_reward = self.car_model.get_reward()
-
+        print(self.car_model.position)
         if action is not None:
             self.reward -= 0.1 # reward discount
 
@@ -579,7 +583,7 @@ class MiniF1RLEnv(gymnasium.Env):
         if self.screen is None and mode == 'human':
             pg.init()
             pg.display.init()
-            self.screen = pg.display.set_mode((800, 600))
+            self.screen = pg.display.set_mode((800, 600), pg.RESIZABLE)
             pg.display.set_caption("MiniF1RL")
 
         if self.clock is None:
