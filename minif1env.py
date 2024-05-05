@@ -122,14 +122,13 @@ class CarModel:
         }   
 
     def get_observation(self):
-        # Returns the observation of the car (lidar sensor data)
-        return self.lidar_sensor_distances
+        # Returns the observation of the car (lidar sensor data) and the steering angle
+        return self.lidar_sensor_distances.append(self.steering)
 
     def get_termination(self):
         # Returns the termination condition of the car (collision or reaching the end of the track)
         car_invalid_position = (not self.valid_position_bbox[0][0] < self.position.x < self.valid_position_bbox[0][1] 
                                 or not self.valid_position_bbox[1][0] < self.position.y < self.valid_position_bbox[1][1])
-        print(car_invalid_position)
         return self.collision or self.progress > 0.99 or car_invalid_position
 
     def get_reward(self):
@@ -389,7 +388,7 @@ class CarModel:
         text = font.render(f"Progress: {self.progress:.2f}", True, (255, 255, 255))
         screen.blit(text, (10, 50))
         text = font.render(f"Sensors: {self.lidar_sensor_distances}", True, (255, 255, 255))
-
+        screen.blit(text, (10, 70))
 
         # draw the controlls left right and boost as rectagles that change color when pressed.
         # the buttons should be alligned susch as the left right and up arrow key on a keyboard
@@ -531,8 +530,10 @@ class MiniF1RLEnv(gymnasium.Env):
         # Initialize car model
         self.car_model = CarModel(*CAR_START_POSITION)
         # Initialize environment
-        self.action_space = spaces.Discrete(4) # 0 = nothing, 1 = left, 2 = right, 3 = boost
-        self.observation_space = spaces.Box(low=0, high=100, shape=(3,), dtype=np.float32)
+        # Actions: 0 = nothing, 1 = left, 2 = right, 3 = boost
+        self.action_space = spaces.Discrete(4) 
+        # Observation: 3 lidar sensors and the steering angle
+        self.observation_space = spaces.Box(low=0, high=100, shape=(4,), dtype=np.float32)
         self.reward = 0
         self.prev_reward = 0
 
@@ -560,7 +561,7 @@ class MiniF1RLEnv(gymnasium.Env):
         terminate = self.car_model.get_termination()
         observation = self.car_model.get_observation()
         step_reward = self.car_model.get_reward()
-        print(self.car_model.position)
+
         if action is not None:
             self.reward -= 0.1 # reward discount
 
@@ -591,6 +592,7 @@ class MiniF1RLEnv(gymnasium.Env):
 
         self.screen.fill((0, 0, 0))
         self.car_model.draw(self.screen, 64)
+        self.clock.tick(120)
         pg.display.flip()
 
     def get_reward_weights(self):
@@ -647,6 +649,5 @@ if __name__ == '__main__':
             action = 3
 
         env.step(action)
-        env.clock.tick(60)
         env.render()
     env.close()
