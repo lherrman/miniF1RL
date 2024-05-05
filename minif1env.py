@@ -384,6 +384,7 @@ class CarModel:
         screen.blit(text, (10, 30))
         text = font.render(f"Progress: {self.progress:.2f}", True, (255, 255, 255))
         screen.blit(text, (10, 50))
+        text = font.render(f"Sensors: {self.lidar_sensor_distances}", True, (255, 255, 255))
 
 
         # draw the controlls left right and boost as rectagles that change color when pressed.
@@ -405,11 +406,6 @@ class CarModel:
             start_pos = (self.position - self.camera_position_smooth) * self.ppu
             end_pos = (self.position + sensor_vector * self.lidar_sensor_distances[i] - self.camera_position_smooth) * self.ppu
             pg.draw.line(screen, sensor_color, start_pos, end_pos, 1)
-
-            if end_pos.x > 0 and end_pos.x < screen.get_width() and end_pos.y > 0 and end_pos.y < screen.get_height():
-                font = pg.font.Font(None, 16)
-                text = font.render(f"{sensor_value:.2f}", True, sensor_color)
-                screen.blit(text, (end_pos.x, end_pos.y))
 
             
     def _draw_track_boundaries(self, screen):
