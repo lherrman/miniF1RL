@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 
@@ -63,7 +64,7 @@ class CarModel:
         self.W1_progress = 1000
         self.W2_speed = 1.0
         self.W3_finish = 100
-        self.W4_collision = -100
+        self.W4_collision = -200
 
     def reset(self, randomize=True):
         
@@ -123,7 +124,7 @@ class CarModel:
 
     def get_observation(self):
         # Returns the observation of the car (lidar sensor data) and the steering angle
-        return self.lidar_sensor_distances.append(self.steering)
+        return np.array(self.lidar_sensor_distances + [self.steering])
 
     def get_termination(self):
         # Returns the termination condition of the car (collision or reaching the end of the track)
@@ -387,7 +388,8 @@ class CarModel:
         screen.blit(text, (10, 30))
         text = font.render(f"Progress: {self.progress:.2f}", True, (255, 255, 255))
         screen.blit(text, (10, 50))
-        text = font.render(f"Sensors: {self.lidar_sensor_distances}", True, (255, 255, 255))
+        sensor_data = ", ".join([f"{d:.2f}" for d in self.lidar_sensor_distances])
+        text = font.render(f"Sensors: {sensor_data}", True, (255, 255, 255))
         screen.blit(text, (10, 70))
 
         # draw the controlls left right and boost as rectagles that change color when pressed.
@@ -526,7 +528,7 @@ class MiniF1RLEnv(gymnasium.Env):
         # Initialize pygame stuff
         self.render_mode = render_mode
         self.screen: pg.Surface|None = None
-        self.clock = None
+        self.clock = pg.time.Clock()
         # Initialize car model
         self.car_model = CarModel(*CAR_START_POSITION)
         # Initialize environment
@@ -536,9 +538,14 @@ class MiniF1RLEnv(gymnasium.Env):
         self.observation_space = spaces.Box(low=0, high=100, shape=(4,), dtype=np.float32)
         self.reward = 0
         self.prev_reward = 0
+        self.last_step = datetime.now()
 
     def step(self, action):
         dt = 1/30
+
+        # time_diff = datetime.now() - self.last_step
+        # self.last_step = datetime.now()
+        # print(f"Ticks per second: {1 / time_diff.total_seconds()}")
 
         # Update car model
         if action is not None:
@@ -561,9 +568,8 @@ class MiniF1RLEnv(gymnasium.Env):
         terminate = self.car_model.get_termination()
         observation = self.car_model.get_observation()
         step_reward = self.car_model.get_reward()
-
         if action is not None:
-            self.reward -= 0.1 # reward discount
+            self.reward -= 0.1 
 
         self.car_model.update(dt)
         return observation, step_reward, terminate, {}, {}
@@ -575,10 +581,10 @@ class MiniF1RLEnv(gymnasium.Env):
 
         self.car_model.reset()
 
-        if self.render_mode == 'human':
-            self.render()
+        # if self.render_mode == 'human':
+        #     self.render()
 
-        return self.step(None)[0], {}
+        return self.step(None)[0], None
 
     def render(self, mode='human'):
         if self.screen is None and mode == 'human':
@@ -586,9 +592,6 @@ class MiniF1RLEnv(gymnasium.Env):
             pg.display.init()
             self.screen = pg.display.set_mode((800, 600), pg.RESIZABLE)
             pg.display.set_caption("MiniF1RL")
-
-        if self.clock is None:
-            self.clock = pg.time.Clock()
 
         self.screen.fill((0, 0, 0))
         self.car_model.draw(self.screen, 64)
@@ -606,6 +609,7 @@ class MiniF1RLEnv(gymnasium.Env):
     def close(self):
         pg.display.quit()
         pg.quit()
+        self.screen = None
         
 
     def seed(self, seed=None):
@@ -613,8 +617,12 @@ class MiniF1RLEnv(gymnasium.Env):
 
 if __name__ == '__main__':
     env = MiniF1RLEnv()
-    env.reset()
-    env.render()
+
+    # For manual play reduce steering speed
+    env.car_model.steering_speed *= 0.5
+
+    pg.init()
+
     done = False
 
     keycontrolls = {"left": False, "right": False, "boost": False}
@@ -632,6 +640,9 @@ if __name__ == '__main__':
                     keycontrolls["right"] = True
                 elif event.key == pg.K_w:
                     keycontrolls["boost"] = True
+
+                elif event.key == pg.K_ESCAPE:
+                    done = True
             elif event.type == pg.KEYUP:
                 if event.key == pg.K_a:
                     keycontrolls["left"] = False
@@ -648,6 +659,9 @@ if __name__ == '__main__':
         if keycontrolls["boost"]:
             action = 3
 
-        env.step(action)
+        observation, step_reward, terminate, info, idk = env.step(action)
+        if terminate:
+            env.reset()
+
         env.render()
     env.close()
