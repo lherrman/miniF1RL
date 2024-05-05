@@ -56,6 +56,7 @@ class CarModel:
         self.track_boundaries = self._get_track_boundaries_from_image(TRACK_IMAGE_PATH)
         self.progress_boundary = self._calculate_track_progress_boundary() # Used to calculate the progress of the car
         self._init_lidar_sensor_vectors([-45, 0, 45])
+        self.lidar_max_distance = 50
 
         # Reward Weights
         self.W1_progress = 1000
@@ -91,6 +92,7 @@ class CarModel:
             self.lidar_sensor_vectors.append(Vector2(math.cos(angle), math.sin(angle)))
         self.lidar_sensor_distances = [0.0] * len(self.lidar_sensor_vectors)
         self.current_sensor_vectors = [] # stores the current sensor vectors rotated according to the car heading
+        self.lidar_sensor_intercepts = [None] * len(self.lidar_sensor_vectors)
 
     def _get_track_boundaries_from_image(self, image_path) -> dict:
         '''
@@ -168,7 +170,7 @@ class CarModel:
     def _calculate_track_progress_boundary(self):
         # calculate the index from the inner boundary that is closest to the start position
         inner_boundary = self.track_boundaries['inner']
-        start_point = Vector2(*CAR_START_POSITION)
+        start_point = Vector2(self.position)
         start_point = self._get_neares_point_from_boundary(start_point, boundary='inner')
         start_index = np.where(np.all(inner_boundary == start_point, axis=1))[0][0]
         progress_boundary = np.roll(inner_boundary, -start_index-1, axis=0)
@@ -278,17 +280,13 @@ class CarModel:
         for i, sensor_vector in enumerate(self.lidar_sensor_vectors):
             sensor_vector = sensor_vector.rotate(-self.heading.angle_to(Vector2(1, 0)))
             self.current_sensor_vectors.append(sensor_vector)
-            self.lidar_sensor_distances[i] = self._raycast_distance(self.position, sensor_vector, 50)
-
-    def _raycast_distance(self, position, direction, max_distance):
-        '''
-        Shoot a ray from position in direction for max_distance into the track boundaries
-        Return the distance to the first intersection point
-        '''
-        intersection_point = self._raycast(position, direction, max_distance)
-        if intersection_point is None:
-            return max_distance
-        return (intersection_point - position).length()
+            self.lidar_sensor_intercepts[i] = self._raycast(self.position, sensor_vector, self.lidar_max_distance)
+            
+            # set the distance to the sensor intercept
+            if self.lidar_sensor_intercepts[i] is not None:
+                self.lidar_sensor_distances[i] = (self.lidar_sensor_intercepts[i] - self.position).length()
+            else:
+                self.lidar_sensor_distances[i] = self.lidar_max_distance
 
     def _raycast(self, position, direction, max_distance):
         '''
@@ -376,18 +374,17 @@ class CarModel:
         self._draw_tires(screen)
         self._draw_lidar(screen)
         self._draw_car(screen)
-        self._draw_controls(screen)
+        self._draw_ui(screen)
 
-    def _draw_controls(self, screen):
+    def _draw_ui(self, screen):
         font = pg.font.Font(None, 24)
         text = font.render(f"Steering: {self.steering:.2f}", True, (255, 255, 255))
         screen.blit(text, (10, 10))
         text = font.render(f"Velocity: {self.velocity_magnitude:.2f}", True, (255, 255, 255))
         screen.blit(text, (10, 30))
-        # draw the 3 lidar sensor distances
-        for i, distance in enumerate(self.lidar_sensor_distances):
-            text = font.render(f"Sensor {i}: {distance:.2f}", True, (255, 255, 255))
-            screen.blit(text, (10, 50 + 20 * i))
+        text = font.render(f"Progress: {self.progress:.2f}", True, (255, 255, 255))
+        screen.blit(text, (10, 50))
+
 
         # draw the controlls left right and boost as rectagles that change color when pressed.
         # the buttons should be alligned susch as the left right and up arrow key on a keyboard
@@ -401,11 +398,19 @@ class CarModel:
         pg.draw.rect(screen, boost_color, pg.Rect((top_left[0] + width, top_left[1] - width), (width, width)))
 
                                                   
-    def _draw_lidar(self, screen):
+    def _draw_lidar(self, screen: pg.Surface):
         for i, sensor_vector in enumerate(self.current_sensor_vectors):
+            sensor_value = self.lidar_sensor_distances[i]
+            sensor_color = (0, 255,0)
             start_pos = (self.position - self.camera_position_smooth) * self.ppu
             end_pos = (self.position + sensor_vector * self.lidar_sensor_distances[i] - self.camera_position_smooth) * self.ppu
-            pg.draw.line(screen, (0, 255, 0), start_pos, end_pos, 1)
+            pg.draw.line(screen, sensor_color, start_pos, end_pos, 1)
+
+            if end_pos.x > 0 and end_pos.x < screen.get_width() and end_pos.y > 0 and end_pos.y < screen.get_height():
+                font = pg.font.Font(None, 16)
+                text = font.render(f"{sensor_value:.2f}", True, sensor_color)
+                screen.blit(text, (end_pos.x, end_pos.y))
+
             
     def _draw_track_boundaries(self, screen):
         for boundary in self.track_boundaries.values():
@@ -524,7 +529,7 @@ class MiniF1RLEnv(gymnasium.Env):
         self.screen: pg.Surface|None = None
         self.clock = None
         # Initialize car model
-        self.car = CarModel(*CAR_START_POSITION)
+        self.car_model = CarModel(*CAR_START_POSITION)
         # Initialize environment
         self.action_space = spaces.Discrete(3) # 0 = nothing, 1 = left, 2 = right, 3 = boost
         self.observation_space = spaces.Box(low=0, high=100, shape=(3,), dtype=np.float32)
@@ -534,38 +539,32 @@ class MiniF1RLEnv(gymnasium.Env):
     def step(self, action):
         dt = 1/30
 
-        # For simplicity, car will always accelerate
-
         # Update car model
         if action is not None:
             match action:
                 case 0:  # Nothing
-                    self.car.update_velocity(True, False, False, dt)
-                    self.car.update_steering(False, False, dt)
+                    self.car_model.update_velocity(True, False, False, dt)
+                    self.car_model.update_steering(False, False, dt)
                 case 1:  # Left
-                    self.car.update_velocity(True, False, False, dt)
-                    self.car.update_steering(True, False, dt)
+                    self.car_model.update_velocity(True, False, False, dt)
+                    self.car_model.update_steering(True, False, dt)
                 case 2:  # Right
-                    self.car.update_steering(False, True, dt)
-                    self.car.update_velocity(True, False, False, dt)
+                    self.car_model.update_velocity(True, False, False, dt)
+                    self.car_model.update_steering(False, True, dt)
                 case 3:  # Boost
-                    self.car.update_velocity(True, False, True, dt)
-                    self.car.update_steering(False, False, dt)
+                    self.car_model.update_velocity(True, False, True, dt)
+                    self.car_model.update_steering(False, False, dt)
                 case _:
                     raise ValueError(f"Invalid action {action}")
             
-        terminate = self.car.get_termination()
-        observation = self.car.get_observation()
-
-        step_reward = self.car.get_reward()
+        terminate = self.car_model.get_termination()
+        observation = self.car_model.get_observation()
+        step_reward = self.car_model.get_reward()
 
         if action is not None:
             self.reward -= 0.1 # reward discount
 
-        self.car.update(dt)
-        if self.render_mode == 'human':
-            ...#self.render()
-
+        self.car_model.update(dt)
         return observation, step_reward, terminate, {}, {}
         
     def reset(self, **kwargs):
@@ -573,7 +572,7 @@ class MiniF1RLEnv(gymnasium.Env):
         self.reward = 0
         self.prev_reward = 0
 
-        self.car.reset()
+        self.car_model.reset()
 
         if self.render_mode == 'human':
             self.render()
@@ -591,16 +590,15 @@ class MiniF1RLEnv(gymnasium.Env):
             self.clock = pg.time.Clock()
 
         self.screen.fill((0, 0, 0))
-        #self.clock.tick(60)
-        self.car.draw(self.screen, 64)
+        self.car_model.draw(self.screen, 64)
         pg.display.flip()
 
     def get_reward_weights(self):
         return {
-            "W1_progress": self.car.W1_progress,
-            "W2_speed": self.car.W2_speed,
-            "W3_finish": self.car.W3_finish,
-            "W4_collision": self.car.W4_collision
+            "W1_progress": self.car_model.W1_progress,
+            "W2_speed": self.car_model.W2_speed,
+            "W3_finish": self.car_model.W3_finish,
+            "W4_collision": self.car_model.W4_collision
         }
 
     def close(self):
@@ -649,5 +647,6 @@ if __name__ == '__main__':
             action = 3
 
         env.step(action)
+        env.clock.tick(60)
         env.render()
     env.close()

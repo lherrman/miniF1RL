@@ -1,7 +1,7 @@
 {
   "base_model": {
     "max_steering": 4,
-    "steering_speed": 3,
+    "steering_speed": 2,
     "max_velocity": 16,
     "acceleration": 3,
     "deceleration": 2,
