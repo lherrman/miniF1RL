@@ -272,7 +272,7 @@ class CarModel:
 
     def _update_camera_position(self, screen):
         self.camera_position = self.position - (Vector2(*screen.get_rect().center) / self.ppu)
-        self.camera_position_smooth = self.camera_position_smooth * 0.97 + self.camera_position * 0.03
+        self.camera_position_smooth = self.camera_position_smooth * 0.92 + self.camera_position * 0.08
 
     def _update_lidar_data(self):
         '''Update the lidar sensor data by raycasting into the track boundaries'''
