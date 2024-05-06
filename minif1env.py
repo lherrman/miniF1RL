@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+from pathlib import Path
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 
 from enum import Enum
@@ -19,7 +20,7 @@ import numpy as np
 
 
 CAR_START_POSITION = (3.5, 10) # Needs to be adjusted to the track
-TRACK_IMAGE_PATH = "track.png"
+TRACK_IMAGE_PATH = "track2.png"
 
 # Parts of this class are based on the CarModel class i implemented for another project (SlamCar)
 # (base_model.py) https://github.com/lherrman/slamcar-controller
@@ -55,6 +56,13 @@ class CarModel:
 
         # Load track boundaries from image and initialize lidar sensor vectors
         self.track_boundaries = self._get_track_boundaries_from_image(TRACK_IMAGE_PATH)
+        self.background_image = pg.image.load(TRACK_IMAGE_PATH.replace(".png", "_bg.png")) 
+        
+        # scale the background image to the size of the track
+        scale_factor = 1.1
+        #self.background_image = pg.transform.scale(self.background_image, (int(self.background_image.get_width() / 60 * 100), int(self.background_image.get_height() / 60 * 100)))
+        self.background_image = pg.transform.scale(self.background_image, (int(self.background_image.get_width() * scale_factor), int(self.background_image.get_height() * scale_factor)))
+
         self.progress_boundary = self._calculate_track_progress_boundary() # Used to calculate the progress of the car
         self._init_lidar_sensor_vectors([-45, 0, 45])
         self.lidar_max_distance = 50
@@ -65,6 +73,12 @@ class CarModel:
         self.W2_speed = 1.0
         self.W3_finish = 100
         self.W4_collision = -200
+
+    def _load_background_image(self, image_path):
+        try:
+            self.background_image = pg.image.load(image_path)
+        except:
+            self.background_image = None
 
     def set_track(self, track_image_path):
         self.track_boundaries = self._get_track_boundaries_from_image(track_image_path)
@@ -381,7 +395,7 @@ class CarModel:
 
         self._update_camera_position(screen)
         self._draw_grid(screen)
-        self._draw_track_boundaries(screen)
+        self._draw_track(screen)
         self._draw_tires(screen)
         self._draw_lidar(screen)
         self._draw_car(screen)
@@ -420,7 +434,17 @@ class CarModel:
             pg.draw.line(screen, sensor_color, start_pos, end_pos, 1)
 
             
-    def _draw_track_boundaries(self, screen):
+    def _draw_track(self, screen):
+        draw_background = True
+        draw_boundary = False
+
+        if draw_background:
+            top_left = -self.camera_position_smooth * self.ppu
+            screen.blit(self.background_image, top_left)
+
+        if not draw_boundary:
+            return
+        
         for boundary in self.track_boundaries.values():
             for i in range(len(boundary) - 1):
                 p1 = Vector2(*boundary[i])
@@ -551,9 +575,9 @@ class MiniF1RLEnv(gymnasium.Env):
     def step(self, action):
         dt = 1/30
 
-        # time_diff = datetime.now() - self.last_step
-        # self.last_step = datetime.now()
-        # print(f"Ticks per second: {1 / time_diff.total_seconds()}")
+        time_diff = datetime.now() - self.last_step
+        self.last_step = datetime.now()
+        print(f"Ticks per second: {1 / time_diff.total_seconds()}")
 
         # Update car model
         if action is not None:
@@ -596,7 +620,7 @@ class MiniF1RLEnv(gymnasium.Env):
         return self.step(None)[0], None
 
     def render(self, mode='human'):
-        if self.screen is None and mode == 'human':
+        if self.screen is None:
             pg.init()
             pg.display.init()
             self.screen = pg.display.set_mode((800, 600), pg.RESIZABLE)
