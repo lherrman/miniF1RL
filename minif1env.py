@@ -57,6 +57,7 @@ class CarModel:
 
         # Load track boundaries from image and initialize lidar sensor vectors
         self.track_boundaries = self._get_track_boundaries_from_image(TRACK_IMAGE_PATH)
+        self.middle_line = self._calculate_middle_line()
         self.background_image = pg.image.load(TRACK_IMAGE_PATH.replace(".png", "_bg.png")) 
         
         # scale the background image to the size of the track
@@ -74,6 +75,9 @@ class CarModel:
         self.W2_speed = 1.0
         self.W3_finish = 100
         self.W4_collision = -200
+
+        self.graphics_modes = ['wireframe', 'graphics']
+        self.graphics_mode = 'wireframe'
 
         self.reset()
 
@@ -103,7 +107,7 @@ class CarModel:
         self.collision = False
         self.progress = 0.0
         self.last_progress = 0.0
-
+        self._load_parameters_from_config()
         self.progress_boundary = self._calculate_track_progress_boundary()
 
     def _init_lidar_sensor_vectors(self, sensor_angles):
@@ -135,11 +139,18 @@ class CarModel:
 
         # Scale the contours to make suitable for the simulation
         inner_boundary, outer_boundary = inner_boundary / 60, outer_boundary / 60
-
         return {
             'inner': inner_boundary,
             'outer': outer_boundary
         }   
+
+    def _calculate_middle_line(self):
+        middle_line = []
+        for point_inner in self.track_boundaries['inner']:
+            point_outer = self._get_neares_point_from_boundary(Vector2(*point_inner), boundary='outer')
+            middle_point = (Vector2(*point_inner) + Vector2(*point_outer)) / 2
+            middle_line.append(middle_point)
+        return middle_line
 
     def get_observation(self):
         # Returns the observation of the car (lidar sensor data) and the steering angle
@@ -222,8 +233,8 @@ class CarModel:
         self.heading = self.heading.rotate(steering_angle)
 
         # Apply drag
-        drag_force = -self.drag_coefficient * self.velocity_magnitude * self.velocity_magnitude
-        self.velocity_magnitude += drag_force * dt
+        drag_force = self.drag_coefficient * self.velocity_magnitude * self.velocity_magnitude
+        self.velocity_magnitude -= drag_force * dt
 
         # Calculate velocity vector
         self.velocity = self.heading * self.velocity_magnitude
@@ -232,7 +243,6 @@ class CarModel:
         heading_perpendicular = self.heading.rotate(math.copysign(90, self.steering)).normalize()
         self.velocity += heading_perpendicular * self.drifting_coefficient * abs(self.steering * self.velocity_magnitude)
        
-        self.velocity_magnitude = 3.0
         self.velocity = self.heading * self.velocity_magnitude
         # Update position
         self.position += self.velocity * dt
@@ -390,7 +400,8 @@ class CarModel:
         self._draw_grid(screen)
         self._draw_track(screen)
         self._draw_tires(screen)
-        self._draw_lidar(screen)
+        if self.graphics_mode == 'wireframe':
+            self._draw_lidar(screen)
         self._draw_car(screen)
         self._draw_ui(screen)
 
@@ -428,8 +439,8 @@ class CarModel:
 
             
     def _draw_track(self, screen):
-        draw_background = True
-        draw_boundary = False
+        draw_background = self.graphics_mode == 'graphics'
+        draw_boundary = self.graphics_mode == 'wireframe'
 
         if draw_background:
             top_left = -self.camera_position_smooth * self.ppu
@@ -449,7 +460,16 @@ class CarModel:
                     p1.y < -300 or p2.y < -300 or p1.y > screen.get_height() + 300 or
                     p2.y > screen.get_height()+300):
                     continue
-                pg.draw.line(screen, (255, 0, 0), p1, p2, 2)
+                pg.draw.line(screen, (255, 30, 30), p1, p2, 2)
+
+        #draw midle line
+        for i in range(len(self.middle_line) - 1):
+            p1 = self.middle_line[i]
+            p2 = self.middle_line[i + 1]
+            p1 = (p1 - self.camera_position_smooth) * self.ppu
+            p2 = (p2 - self.camera_position_smooth) * self.ppu
+            pg.draw.line(screen, (50, 50, 50), p1, p2, 2)
+
 
     def _draw_grid(self, screen):
         canvas_width = screen.get_width()
@@ -544,7 +564,8 @@ class CarModel:
             points = [p + tire for p in tire_corner_points]
             pg.draw.polygon(screen, (255, 255, 255), points, 2)
 
-
+    def switch_render_mode(self):
+        self.graphics_mode = self.graphics_modes[(self.graphics_modes.index(self.graphics_mode) + 1) % len(self.graphics_modes)]
     
 class MiniF1RLEnv(gymnasium.Env):
 
@@ -566,18 +587,13 @@ class MiniF1RLEnv(gymnasium.Env):
         self.last_step = datetime.now()
 
     def step(self, action):
-        # dt = 1/30
-
-        current_time = datetime.now()
-        dt = (current_time - self.last_step).total_seconds()
-        self.last_step = current_time
-        print(f"Ticks per second: {1 / dt}")
+        dt = 1/30
 
         # Update car model
         if action is not None:
             match action:
                 case 0:  # Nothing
-                    self.car_model.update_velocity(True, False, False, dt)
+                    self.car_model.update_velocity(False, False, False, dt)
                     self.car_model.update_steering(False, False, dt)
                 case 1:  # Left
                     self.car_model.update_velocity(True, False, False, dt)
@@ -620,9 +636,9 @@ class MiniF1RLEnv(gymnasium.Env):
             self.screen = pg.display.set_mode((800, 600), pg.RESIZABLE)
             pg.display.set_caption("MiniF1RL")
 
+
         self.screen.fill((0, 0, 0))
         self.car_model.draw(self.screen)
-        #self.clock.tick(120)
         pg.display.flip()
 
     def get_reward_weights(self):
@@ -653,6 +669,11 @@ if __name__ == '__main__':
     last_frame = datetime.now()
     while not done:
 
+        # Limit framerate for manual controlls
+        if (datetime.now() - last_frame).total_seconds() < 1/100:
+            continue
+        last_frame = datetime.now()
+
         # Update controlls
         for event in pg.event.get():
             if event.type == pg.QUIT:
@@ -665,6 +686,8 @@ if __name__ == '__main__':
                     keycontrolls["right"] = True
                 elif event.key == pg.K_w:
                     keycontrolls["boost"] = True
+                elif event.key == pg.K_g:
+                    env.car_model.switch_render_mode()
 
                 elif event.key == pg.K_ESCAPE:
                     done = True
@@ -679,9 +702,9 @@ if __name__ == '__main__':
         action = 0
         if keycontrolls["left"]:
             action = 1
-        if keycontrolls["right"]:
+        elif keycontrolls["right"]:
             action = 2
-        if keycontrolls["boost"]:
+        elif keycontrolls["boost"]:
             action = 3
 
         observation, step_reward, terminate, info, idk = env.step(action)
