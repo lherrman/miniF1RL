@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 from pathlib import Path
+import time
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 
 from enum import Enum
@@ -52,14 +53,14 @@ class CarModel:
         self.camera_position = Vector2(0, 0) # position of the camera in the world
         self.camera_position_smooth = Vector2(0, 0) # smoothed position of the camera in the world
 
-        self.ppu = 128 # pixels per unit
+        self.ppu = 64 # pixels per unit
 
         # Load track boundaries from image and initialize lidar sensor vectors
         self.track_boundaries = self._get_track_boundaries_from_image(TRACK_IMAGE_PATH)
         self.background_image = pg.image.load(TRACK_IMAGE_PATH.replace(".png", "_bg.png")) 
         
         # scale the background image to the size of the track
-        scale_factor = 1.1
+        scale_factor = self.ppu / 60
         #self.background_image = pg.transform.scale(self.background_image, (int(self.background_image.get_width() / 60 * 100), int(self.background_image.get_height() / 60 * 100)))
         self.background_image = pg.transform.scale(self.background_image, (int(self.background_image.get_width() * scale_factor), int(self.background_image.get_height() * scale_factor)))
 
@@ -74,11 +75,10 @@ class CarModel:
         self.W3_finish = 100
         self.W4_collision = -200
 
+        self.reset()
+
     def _load_background_image(self, image_path):
-        try:
-            self.background_image = pg.image.load(image_path)
-        except:
-            self.background_image = None
+        ...
 
     def set_track(self, track_image_path):
         self.track_boundaries = self._get_track_boundaries_from_image(track_image_path)
@@ -86,16 +86,17 @@ class CarModel:
 
     def reset(self, randomize=True):
         
-        random_inner_boundary_index = np.random.randint(1, len(self.track_boundaries['inner']) - 1)
-        p1 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index - 1])
-        p2 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index])
-        p1top2 = p2 - p1
-        nearest_point_on_outer_boundary = self._get_neares_point_from_boundary(p1, boundary='outer')
-        p1_to_nearest_outer = nearest_point_on_outer_boundary - p1
-        start_position = p1 + (p1_to_nearest_outer / 2)
+        def get_random_Start_position():
+            random_inner_boundary_index = np.random.randint(1, len(self.track_boundaries['inner']) - 1)
+            p1 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index - 1])
+            p2 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index])
+            heading = p2 - p1
+            nearest_point_on_outer_boundary = self._get_neares_point_from_boundary(p1, boundary='outer')
+            p1_to_nearest_outer = nearest_point_on_outer_boundary - p1
+            start_position = p1 + (p1_to_nearest_outer / 2)
+            return start_position, -heading.normalize()
 
-        self.position = start_position
-        self.heading = -p1top2
+        self.position, self.heading = get_random_Start_position()
         self.velocity = Vector2(0.0, 0.0)
         self.velocity_magnitude = 0.0
         self.steering = 0.0
@@ -203,7 +204,6 @@ class CarModel:
         return progress_boundary
 
     def update(self, dt):
-        #self._update_inputs_human(dt)
         self._update_position(dt)
         self._update_lidar_data()
         self._update_track_collision()
@@ -231,18 +231,12 @@ class CarModel:
         # Apply drifting effect
         heading_perpendicular = self.heading.rotate(math.copysign(90, self.steering)).normalize()
         self.velocity += heading_perpendicular * self.drifting_coefficient * abs(self.steering * self.velocity_magnitude)
-
+       
+        self.velocity_magnitude = 3.0
+        self.velocity = self.heading * self.velocity_magnitude
         # Update position
         self.position += self.velocity * dt
 
-    def _update_inputs_human(self, dt):
-        pressed = pg.key.get_pressed()
-
-        # Steering
-        self.update_steering(pressed[pg.K_a], pressed[pg.K_d], dt)
-
-        # Velocity
-        self.update_velocity(pressed[pg.K_w], pressed[pg.K_s], dt)
 
     def update_steering(self, left, right, dt):
         if left:
@@ -284,7 +278,7 @@ class CarModel:
             else:
                 self.velocity_magnitude = min(0, self.velocity_magnitude + self.acceleration_speed * dt)
 
-        # Write controlls buffer
+        # Write controlls buffer to draw the controlls in the UI
         self.controlls_buffer["up"] = up
         self.controlls_buffer["down"] = down
         self.controlls_buffer["boost"] = boost
@@ -390,8 +384,7 @@ class CarModel:
         else:
             return None  # No intersection
         
-    def draw(self, screen, ppu):
-        self.ppu = ppu
+    def draw(self, screen):
 
         self._update_camera_position(screen)
         self._draw_grid(screen)
@@ -573,11 +566,12 @@ class MiniF1RLEnv(gymnasium.Env):
         self.last_step = datetime.now()
 
     def step(self, action):
-        dt = 1/30
+        # dt = 1/30
 
-        time_diff = datetime.now() - self.last_step
-        self.last_step = datetime.now()
-        print(f"Ticks per second: {1 / time_diff.total_seconds()}")
+        current_time = datetime.now()
+        dt = (current_time - self.last_step).total_seconds()
+        self.last_step = current_time
+        print(f"Ticks per second: {1 / dt}")
 
         # Update car model
         if action is not None:
@@ -627,8 +621,8 @@ class MiniF1RLEnv(gymnasium.Env):
             pg.display.set_caption("MiniF1RL")
 
         self.screen.fill((0, 0, 0))
-        self.car_model.draw(self.screen, 64)
-        self.clock.tick(120)
+        self.car_model.draw(self.screen)
+        #self.clock.tick(120)
         pg.display.flip()
 
     def get_reward_weights(self):
@@ -656,6 +650,7 @@ if __name__ == '__main__':
     done = False
 
     keycontrolls = {"left": False, "right": False, "boost": False}
+    last_frame = datetime.now()
     while not done:
 
         # Update controlls
@@ -690,8 +685,9 @@ if __name__ == '__main__':
             action = 3
 
         observation, step_reward, terminate, info, idk = env.step(action)
+        env.render()
+
         if terminate:
             env.reset()
 
-        env.render()
     env.close()
