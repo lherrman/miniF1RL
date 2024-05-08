@@ -700,10 +700,10 @@ class MiniF1RLEnv(gymnasium.Env):
                             "left": False, 
                             "right": False, 
                             "boost": False}
-        
+        events = pg.event.get()
         # Event handling
         done = False
-        for event in pg.event.get():
+        for event in events:
             if event.type == pg.QUIT:
                 done = True
                 continue
@@ -717,6 +717,8 @@ class MiniF1RLEnv(gymnasium.Env):
                     self.car_model.switch_graphics_mode()
                 elif event.key == pg.K_t:
                     self.car_model.switch_track()
+                elif event.key == pg.K_r:
+                    self.reset()
                 
             # Zoom in and out using the mouse wheel
             elif event.type == pg.MOUSEWHEEL:
@@ -725,10 +727,11 @@ class MiniF1RLEnv(gymnasium.Env):
                 elif event.y < 0:
                     self.car_model.zoom(-4)
 
+        if not human_control:
+            return done
 
-            if not human_control:
-                continue
-            
+        for event in events:
+        
             # Handle key controlls for manual play
             if event.type == pg.KEYDOWN:
                 if event.key == pg.K_w:
@@ -752,10 +755,9 @@ class MiniF1RLEnv(gymnasium.Env):
                     self.keyctrl["left"] = False
                 elif event.key == pg.K_d:
                     self.keyctrl["right"] = False
-           
-        if human_control:
-            self.car_model.update_velocity(self.keyctrl["up"], self.keyctrl["down"], self.keyctrl["boost"], self.dt)
-            self.car_model.update_steering(self.keyctrl["left"], self.keyctrl["right"], self.dt)
+     
+        self.car_model.update_velocity(self.keyctrl["up"], self.keyctrl["down"], self.keyctrl["boost"], self.dt)
+        self.car_model.update_steering(self.keyctrl["left"], self.keyctrl["right"], self.dt)
 
         return done
 
