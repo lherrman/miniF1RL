@@ -1,4 +1,5 @@
 from datetime import datetime
+import glob
 import os
 from pathlib import Path
 import time
@@ -21,7 +22,7 @@ import numpy as np
 
 
 CAR_START_POSITION = (3.5, 10) # Needs to be adjusted to the track
-TRACK_IMAGE_PATH = "track2.png"
+DEFAULT_TRACK_INDEX = 1
 
 # Parts of this class are based on the CarModel class i implemented for another project (SlamCar)
 # (base_model.py) https://github.com/lherrman/slamcar-controller
@@ -29,23 +30,15 @@ TRACK_IMAGE_PATH = "track2.png"
 class CarModel:
     def __init__(self, x, y):
         # Car parameters are loaded from the config file
-        self.length = 0             # length of the car in meters
-        self.width = 0              # width of the car in meters
-        self.max_velocity = 0       # meters per second
-        self.acceleration_speed = 0 # meters per second
-        self.steering_speed =   0   # degrees per second
-        self.max_steering = 0       # degrees
-        self.boost_factor = 0       # boost factor
         self._load_parameters_from_config()
 
-        # Car state
+        # Car / Game state
         self.position = Vector2(x, y)                # position in meters
         self.heading = Vector2(0, -1).normalize()    # heading vector
         self.velocity = Vector2(0.0, 0.0)            # velocity
         self.velocity_magnitude = 0.0                # velocity magnitude
         self.steering = 0.0                          # tire angle in degrees
         self.collision = False                       # collision flag
-        self.controlls_buffer = {"left": False, "right": False, "up": False, "down": False, "boost": False}
         self.progress = 0.0                          # progress of the car on the track
         self.last_progress = 0.0                     # last progress of the car on the track
 
@@ -56,14 +49,9 @@ class CarModel:
         self.ppu = 64 # pixels per unit
 
         # Load track boundaries from image and initialize lidar sensor vectors
-        self.track_boundaries = self._get_track_boundaries_from_image(TRACK_IMAGE_PATH)
-        self.middle_line = self._calculate_middle_line()
-        self.background_image = pg.image.load(TRACK_IMAGE_PATH.replace(".png", "_bg.png")) 
-        
-        # scale the background image to the size of the track
-        scale_factor = self.ppu / 60
-        #self.background_image = pg.transform.scale(self.background_image, (int(self.background_image.get_width() / 60 * 100), int(self.background_image.get_height() / 60 * 100)))
-        self.background_image = pg.transform.scale(self.background_image, (int(self.background_image.get_width() * scale_factor), int(self.background_image.get_height() * scale_factor)))
+        self.available_tracks = self._get_available_tracks()
+        self.current_track_index = DEFAULT_TRACK_INDEX
+        self.switch_track(self.current_track_index)
 
         self.progress_boundary = self._calculate_track_progress_boundary() # Used to calculate the progress of the car
         self._init_lidar_sensor_vectors([-45, 0, 45])
@@ -78,79 +66,21 @@ class CarModel:
 
         self.graphics_modes = ['wireframe', 'graphics']
         self.graphics_mode = 'wireframe'
+        self.controlls_buffer = {"left": False, "right": False, "up": False, "down": False, "boost": False}
 
         self.reset()
 
-    def _load_background_image(self, image_path):
-        ...
-
-    def set_track(self, track_image_path):
-        self.track_boundaries = self._get_track_boundaries_from_image(track_image_path)
-        self.progress_boundary = self._calculate_track_progress_boundary()
-
-    def reset(self, randomize=True):
-        
-        def get_random_Start_position():
-            random_inner_boundary_index = np.random.randint(1, len(self.track_boundaries['inner']) - 1)
-            p1 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index - 1])
-            p2 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index])
-            heading = p2 - p1
-            nearest_point_on_outer_boundary = self._get_neares_point_from_boundary(p1, boundary='outer')
-            p1_to_nearest_outer = nearest_point_on_outer_boundary - p1
-            start_position = p1 + (p1_to_nearest_outer / 2)
-            return start_position, -heading.normalize()
-
-        self.position, self.heading = get_random_Start_position()
-        self.velocity = Vector2(0.0, 0.0)
-        self.velocity_magnitude = 0.0
-        self.steering = 0.0
-        self.collision = False
-        self.progress = 0.0
-        self.last_progress = 0.0
-        self._load_parameters_from_config()
-        self.progress_boundary = self._calculate_track_progress_boundary()
-
-    def _init_lidar_sensor_vectors(self, sensor_angles):
-        self.lidar_sensor_vectors = []
-        for i in sensor_angles:
-            angle = math.radians(i)
-            self.lidar_sensor_vectors.append(Vector2(math.cos(angle), math.sin(angle)))
-        self.lidar_sensor_distances = [0.0] * len(self.lidar_sensor_vectors)
-        self.current_sensor_vectors = [] # stores the current sensor vectors rotated according to the car heading
-        self.lidar_sensor_intercepts = [None] * len(self.lidar_sensor_vectors)
-
-    def _get_track_boundaries_from_image(self, image_path) -> dict:
-        '''
-        Using opencv to read the image and find the contours of the track boundaries.
-        The boundaries are represented as list of points. ([x1, y1], [x2, y2], ...)
-        '''
-        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        assert len(contours) == 2, "There should be exactly 2 contours in the image"
-
-        # Transform and downsample the contours
-        downsample_rate = 10
-        inner_boundary = contours[0][:, 0, :][::downsample_rate]
-        outer_boundary = contours[1][:, 0, :][::downsample_rate]
-
-        # # Append last point to close the loop
-        inner_boundary = np.append(inner_boundary, [inner_boundary[0]], axis=0)
-        outer_boundary = np.append(outer_boundary, [outer_boundary[0]], axis=0)
-
-        # Scale the contours to make suitable for the simulation
-        inner_boundary, outer_boundary = inner_boundary / 60, outer_boundary / 60
-        return {
-            'inner': inner_boundary,
-            'outer': outer_boundary
-        }   
-
-    def _calculate_middle_line(self):
-        middle_line = []
-        for point_inner in self.track_boundaries['inner']:
-            point_outer = self._get_neares_point_from_boundary(Vector2(*point_inner), boundary='outer')
-            middle_point = (Vector2(*point_inner) + Vector2(*point_outer)) / 2
-            middle_line.append(middle_point)
-        return middle_line
+    def _load_parameters_from_config(self):
+        self.length = cfg.get("car_length")
+        self.width = cfg.get("car_width")
+        self.max_steering = cfg.get("max_steering")
+        self.max_velocity = cfg.get("max_velocity")
+        self.acceleration_speed = cfg.get("acceleration")
+        self.steering_speed = cfg.get("steering_speed")
+        self.boost_factor = cfg.get("boost_factor")
+        self.drag_coefficient = cfg.get("drag_coefficient") # Currently not used
+        self.slipage_coefficient = cfg.get("slipage_coefficient") # Currently not used
+        self.drifting_coefficient = cfg.get("drifting_coefficient") # Currently not used
 
     def get_observation(self):
         # Returns the observation of the car (lidar sensor data) and the steering angle
@@ -186,24 +116,113 @@ class CarModel:
                     weighted_collision_reward
                   )
 
-        # Update the last progress
-        #print(f'Progress: {weighted_progress_diff_reward}, Speed: {weighted_speed_reward}, Finish: {weighted_finish_reward}, Collision: {weighted_collision_reward}, Total: {reward}')
-
         self.last_progress = self.progress
         return reward
 
-    def _load_parameters_from_config(self):
-        self.length = cfg.get("car_length")
-        self.width = cfg.get("car_width")
-        self.max_steering = cfg.get("max_steering")
-        self.max_velocity = cfg.get("max_velocity")
-        self.acceleration_speed = cfg.get("acceleration")
-        self.steering_speed = cfg.get("steering_speed")
-        self.boost_factor = cfg.get("boost_factor")
-        self.drag_coefficient = cfg.get("drag_coefficient") # Currently not used
-        self.slipage_coefficient = cfg.get("slipage_coefficient") # Currently not used
-        self.drifting_coefficient = cfg.get("drifting_coefficient") # Currently not used
+    def reset(self, randomize=True):
+        
+        def get_random_Start_position():
+            random_inner_boundary_index = np.random.randint(1, len(self.track_boundaries['inner']) - 1)
+            p1 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index - 1])
+            p2 = Vector2(*self.track_boundaries['inner'][random_inner_boundary_index])
+            heading = p2 - p1
+            nearest_point_on_outer_boundary = self._get_neares_point_from_boundary(p1, boundary='outer')
+            p1_to_nearest_outer = nearest_point_on_outer_boundary - p1
+            start_position = p1 + (p1_to_nearest_outer / 2)
+            return start_position, -heading.normalize()
 
+        self.position, self.heading = get_random_Start_position()
+        self.velocity = Vector2(0.0, 0.0)
+        self.velocity_magnitude = 0.0
+        self.steering = 0.0
+        self.collision = False
+        self.progress = 0.0
+        self.last_progress = 0.0
+        self._load_parameters_from_config()
+        self.progress_boundary = self._calculate_track_progress_boundary()
+
+    def switch_graphics_mode(self):
+        self.graphics_mode = self.graphics_modes[(self.graphics_modes.index(self.graphics_mode) + 1) % len(self.graphics_modes)]
+
+    def zoom(self, factor):
+        self.ppu = max(10, self.ppu + factor)
+        scale_factor = self.ppu / 60
+        self.background_image_scaled = pg.transform.scale(self.background_image, (int(self.background_image.get_width() * scale_factor), int(self.background_image.get_height() * scale_factor)))
+   
+    def switch_track(self, track_index=None):
+        if track_index is None:
+            index = (self.current_track_index + 1) % len(self.available_tracks)
+            self.current_track_index = index
+            self._set_track(self.available_tracks[index])
+        else:
+            track_index = min(track_index, len(self.available_tracks) - 1)
+            self.current_track_index = track_index
+            self._set_track(self.available_tracks[track_index])
+        self.reset()
+
+    def _get_available_tracks(self):
+        all_track_files = glob.glob("assets/track*.png")
+        available_tracks = [file for file in all_track_files if "_bg" not in file]
+        return available_tracks
+
+    def _set_track(self, track_image_path):
+        self.track_boundaries = self._get_track_boundaries_from_image(track_image_path)
+        self.middle_line = self._calculate_middle_line()
+        self.progress_boundary = self._calculate_track_progress_boundary()
+        background_image_path = Path(track_image_path.replace(".png", "_bg.png"))
+        if background_image_path.exists():
+            self.background_image = pg.image.load(background_image_path)
+            scale_factor = self.ppu / 60
+            self.background_image_scaled = pg.transform.scale(self.background_image, (int(self.background_image.get_width() * scale_factor), int(self.background_image.get_height() * scale_factor)))
+        else:
+            self.background_image = None
+            self.background_image_scaled = None
+
+    def _get_track_boundaries_from_image(self, image_path) -> dict:
+        '''
+        Using opencv to read the image and find the contours of the track boundaries.
+        The boundaries are represented as list of points. ([x1, y1], [x2, y2], ...)
+        '''
+        if not Path(image_path).exists():
+            raise FileNotFoundError(f"Track image not found at {image_path}")
+        
+        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        contours, _ = cv2.findContours(image.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        assert len(contours) == 2, "There should be exactly 2 contours in the image"
+
+        # Transform and downsample the contours
+        downsample_rate = 10
+        inner_boundary = contours[0][:, 0, :][::downsample_rate]
+        outer_boundary = contours[1][:, 0, :][::downsample_rate]
+
+        # # Append last point to close the loop
+        inner_boundary = np.append(inner_boundary, [inner_boundary[0]], axis=0)
+        outer_boundary = np.append(outer_boundary, [outer_boundary[0]], axis=0)
+
+        # Scale the contours to make suitable for the simulation
+        inner_boundary, outer_boundary = inner_boundary / 60, outer_boundary / 60
+        return {
+            'inner': inner_boundary,
+            'outer': outer_boundary
+        }   
+
+    def _calculate_middle_line(self):
+        middle_line = []
+        for point_inner in self.track_boundaries['inner']:
+            point_outer = self._get_neares_point_from_boundary(Vector2(*point_inner), boundary='outer')
+            middle_point = (Vector2(*point_inner) + Vector2(*point_outer)) / 2
+            middle_line.append(middle_point)
+        return middle_line
+
+    def _init_lidar_sensor_vectors(self, sensor_angles):
+        self.lidar_sensor_vectors = []
+        for i in sensor_angles:
+            angle = math.radians(i)
+            self.lidar_sensor_vectors.append(Vector2(math.cos(angle), math.sin(angle)))
+        self.lidar_sensor_distances = [0.0] * len(self.lidar_sensor_vectors)
+        self.current_sensor_vectors = [] # stores the current sensor vectors rotated according to the car heading
+        self.lidar_sensor_intercepts = [None] * len(self.lidar_sensor_vectors)
+    
     def _calculate_track_progress_boundary(self):
         # calculate the index from the inner boundary that is closest to the start position
         inner_boundary = self.track_boundaries['inner']
@@ -399,10 +418,15 @@ class CarModel:
         self._update_camera_position(screen)
         self._draw_grid(screen)
         self._draw_track(screen)
-        self._draw_tires(screen)
+
         if self.graphics_mode == 'wireframe':
             self._draw_lidar(screen)
-        self._draw_car(screen)
+            self._draw_car_wireframe(screen)
+            self._draw_tires(screen)
+
+        elif self.graphics_mode == 'graphics':
+            self._draw_car_sprite(screen)
+
         self._draw_ui(screen)
 
     def _draw_ui(self, screen):
@@ -417,6 +441,18 @@ class CarModel:
         text = font.render(f"Sensors: {sensor_data}", True, (255, 255, 255))
         screen.blit(text, (10, 70))
 
+        # Draw the avaialbel key controlls
+        start_pos = (screen.get_width() - 200, screen.get_height() - 120)
+        text = font.render(f"Switch Track: T", True, (255, 255, 255))
+        screen.blit(text, (start_pos[0], start_pos[1]))
+        text = font.render(f"Switch Graphics: G", True, (255, 255, 255))
+        screen.blit(text, (start_pos[0], start_pos[1] + 20))
+        text = font.render(f"Zoom: Mouse Wheel", True, (255, 255, 255))
+        screen.blit(text, (start_pos[0], start_pos[1] + 40))
+        text = font.render(f"Quit: ESC", True, (255, 255, 255))
+        screen.blit(text, (start_pos[0], start_pos[1] + 60))
+
+
         # draw the controlls left right and boost as rectagles that change color when pressed.
         # the buttons should be alligned susch as the left right and up arrow key on a keyboard
         left_color = (255, 255, 255) if self.controlls_buffer["left"] else (100, 100, 100)
@@ -427,6 +463,7 @@ class CarModel:
         pg.draw.rect(screen, left_color, pg.Rect(top_left, (width, width)))
         pg.draw.rect(screen, right_color, pg.Rect((top_left[0] + width*2, top_left[1]), (width, width)))
         pg.draw.rect(screen, boost_color, pg.Rect((top_left[0] + width, top_left[1] - width), (width, width)))
+
 
                                                   
     def _draw_lidar(self, screen: pg.Surface):
@@ -442,9 +479,9 @@ class CarModel:
         draw_background = self.graphics_mode == 'graphics'
         draw_boundary = self.graphics_mode == 'wireframe'
 
-        if draw_background:
+        if draw_background and self.background_image is not None:
             top_left = -self.camera_position_smooth * self.ppu
-            screen.blit(self.background_image, top_left)
+            screen.blit(self.background_image_scaled, top_left)
 
         if not draw_boundary:
             return
@@ -488,8 +525,16 @@ class CarModel:
         for y in range(start_y, stop_y, self.ppu):
             pg.draw.line(screen, (50, 50, 50), (0, y - self.camera_position_smooth.y * self.ppu), (canvas_width, y - self.camera_position_smooth.y * self.ppu))
 
-    def _draw_car(self, screen):
-        # draw rectangle representing car
+
+    def _draw_car_sprite(self, screen):
+        sprite = pg.image.load("assets/car1.png")
+        sprite = pg.transform.scale(sprite, (int(self.length * self.ppu * 2), int(self.width * self.ppu * 2)))
+        sprite = pg.transform.rotate(sprite, self.heading.angle_to(Vector2(-1, 0)))
+        sprite_rect = sprite.get_rect()
+        sprite_rect.center = (self.position - self.camera_position_smooth) * self.ppu
+        screen.blit(sprite, sprite_rect)
+
+    def _draw_car_wireframe(self, screen):
         angle = -self.heading.angle_to(Vector2(1, 0))
 
         factor_overlap = 1.5 # determines how much the car goes over the tires from the front and back
@@ -506,9 +551,6 @@ class CarModel:
         car_corner_points = [p * self.ppu for p in car_corner_points]
 
         pg.draw.polygon(screen, (255, 255, 255), car_corner_points, 0)
-
-        # indicate front of car
-        #pg.draw.line(screen, (255, 255, 0), self.position *  self.ppu, (self.position + self.heading) * self.ppu * 0.1, 1)
 
     def _draw_tires(self, screen):
         # Draw tires
@@ -564,19 +606,17 @@ class CarModel:
             points = [p + tire for p in tire_corner_points]
             pg.draw.polygon(screen, (255, 255, 255), points, 2)
 
-    def switch_render_mode(self):
-        self.graphics_mode = self.graphics_modes[(self.graphics_modes.index(self.graphics_mode) + 1) % len(self.graphics_modes)]
+
     
 class MiniF1RLEnv(gymnasium.Env):
 
-    def __init__(self, render_mode: str = 'human', track_image_path: str = TRACK_IMAGE_PATH):
+    def __init__(self):
         # Initialize pygame stuff
-        self.render_mode = render_mode
+        self.render_mode = None
         self.screen: pg.Surface|None = None
         self.clock = pg.time.Clock()
         # Initialize car model
         self.car_model = CarModel(*CAR_START_POSITION)
-        self.car_model.set_track(track_image_path)
         # Initialize environment
         # Actions: 0 = nothing, 1 = left, 2 = right, 3 = boost
         self.action_space = spaces.Discrete(4) 
@@ -586,24 +626,25 @@ class MiniF1RLEnv(gymnasium.Env):
         self.prev_reward = 0
         self.last_step = datetime.now()
 
+        self.dt = 1/30 # Fixed timestep
+
     def step(self, action):
-        dt = 1/30
 
         # Update car model
         if action is not None:
             match action:
                 case 0:  # Nothing
-                    self.car_model.update_velocity(False, False, False, dt)
-                    self.car_model.update_steering(False, False, dt)
+                    self.car_model.update_velocity(False, False, False, self.dt)
+                    self.car_model.update_steering(False, False, self.dt)
                 case 1:  # Left
-                    self.car_model.update_velocity(True, False, False, dt)
-                    self.car_model.update_steering(True, False, dt)
+                    self.car_model.update_velocity(True, False, False, self.dt)
+                    self.car_model.update_steering(True, False, self.dt)
                 case 2:  # Right
-                    self.car_model.update_velocity(True, False, False, dt)
-                    self.car_model.update_steering(False, True, dt)
+                    self.car_model.update_velocity(True, False, False, self.dt)
+                    self.car_model.update_steering(False, True, self.dt)
                 case 3:  # Boost
-                    self.car_model.update_velocity(True, False, True, dt)
-                    self.car_model.update_steering(False, False, dt)
+                    self.car_model.update_velocity(True, False, True, self.dt)
+                    self.car_model.update_steering(False, False, self.dt)
                 case _:
                     raise ValueError(f"Invalid action {action}")
             
@@ -614,7 +655,7 @@ class MiniF1RLEnv(gymnasium.Env):
         if action is not None:
             self.reward -= 0.1 
 
-        self.car_model.update(dt)
+        self.car_model.update(self.dt)
         return observation, step_reward, terminate, truncate, {}
         
     def reset(self, **kwargs):
@@ -623,9 +664,6 @@ class MiniF1RLEnv(gymnasium.Env):
         self.prev_reward = 0
 
         self.car_model.reset()
-
-        # if self.render_mode == 'human':
-        #     self.render()
 
         return self.step(None)[0], None
 
@@ -649,6 +687,78 @@ class MiniF1RLEnv(gymnasium.Env):
             "W4_collision": self.car_model.W4_collision
         }
 
+    def handle_pg_events(self, human_control=False) -> bool:
+        '''
+        Handle pygame events and controlls
+        Returns False if the game should be terminated
+        '''
+
+        if not hasattr(self, "keyctrl")\
+              and human_control:
+            self.keyctrl = {"up": False, 
+                            "down": False,
+                            "left": False, 
+                            "right": False, 
+                            "boost": False}
+        
+        # Event handling
+        done = False
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                done = True
+                continue
+            
+            # Handle key bindings
+            elif event.type == pg.KEYDOWN:
+                if event.key == pg.K_ESCAPE:
+                    done = True
+                    continue
+                elif event.key == pg.K_g:
+                    self.car_model.switch_graphics_mode()
+                elif event.key == pg.K_t:
+                    self.car_model.switch_track()
+                
+            # Zoom in and out using the mouse wheel
+            elif event.type == pg.MOUSEWHEEL:
+                if event.y > 0:
+                    self.car_model.zoom(4)
+                elif event.y < 0:
+                    self.car_model.zoom(-4)
+
+
+            if not human_control:
+                continue
+            
+            # Handle key controlls for manual play
+            if event.type == pg.KEYDOWN:
+                if event.key == pg.K_w:
+                    self.keyctrl["up"] = True
+                    self.keyctrl["boost"] = True
+                elif event.key == pg.K_s:
+                    self.keyctrl["down"] = True
+                elif event.key == pg.K_a:
+                    self.keyctrl["left"] = True
+                elif event.key == pg.K_d:
+                    self.keyctrl["right"] = True
+               
+   
+            elif event.type == pg.KEYUP:
+                if event.key == pg.K_w:
+                    self.keyctrl["up"] = False
+                    self.keyctrl["boost"] = False
+                elif event.key == pg.K_s:
+                    self.keyctrl["down"] = False
+                elif event.key == pg.K_a:
+                    self.keyctrl["left"] = False
+                elif event.key == pg.K_d:
+                    self.keyctrl["right"] = False
+           
+        if human_control:
+            self.car_model.update_velocity(self.keyctrl["up"], self.keyctrl["down"], self.keyctrl["boost"], self.dt)
+            self.car_model.update_steering(self.keyctrl["left"], self.keyctrl["right"], self.dt)
+
+        return done
+
     def close(self):
         pg.display.quit()
         pg.quit()
@@ -665,7 +775,7 @@ if __name__ == '__main__':
 
     done = False
 
-    keycontrolls = {"left": False, "right": False, "boost": False}
+ 
     last_frame = datetime.now()
     while not done:
 
@@ -674,43 +784,15 @@ if __name__ == '__main__':
             continue
         last_frame = datetime.now()
 
-        # Update controlls
-        for event in pg.event.get():
-            if event.type == pg.QUIT:
-                done = True
+        exit = env.handle_pg_events(human_control=True)
 
-            elif event.type == pg.KEYDOWN:
-                if event.key == pg.K_a:
-                    keycontrolls["left"] = True
-                elif event.key == pg.K_d:
-                    keycontrolls["right"] = True
-                elif event.key == pg.K_w:
-                    keycontrolls["boost"] = True
-                elif event.key == pg.K_g:
-                    env.car_model.switch_render_mode()
-
-                elif event.key == pg.K_ESCAPE:
-                    done = True
-            elif event.type == pg.KEYUP:
-                if event.key == pg.K_a:
-                    keycontrolls["left"] = False
-                elif event.key == pg.K_d:
-                    keycontrolls["right"] = False
-                elif event.key == pg.K_w:
-                    keycontrolls["boost"] = False
-
-        action = 0
-        if keycontrolls["left"]:
-            action = 1
-        elif keycontrolls["right"]:
-            action = 2
-        elif keycontrolls["boost"]:
-            action = 3
-
-        observation, step_reward, terminate, info, idk = env.step(action)
+        observation, step_reward, terminate, info, idk = env.step(None)
         env.render()
 
         if terminate:
             env.reset()
+
+        if exit:
+            break
 
     env.close()
