@@ -20,7 +20,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
-
+START_WINDOW_SIZE = (1000, 700)
 CAR_START_POSITION = (3.5, 10) # Needs to be adjusted to the track
 DEFAULT_TRACK_INDEX = 1
 
@@ -49,6 +49,7 @@ class CarModel:
         self.ppu = 64 # pixels per unit
 
         # Load track boundaries from image and initialize lidar sensor vectors
+        self.scale_factor = 60
         self.available_tracks = self._get_available_tracks()
         self.current_track_index = DEFAULT_TRACK_INDEX
         self.switch_track(self.current_track_index)
@@ -146,7 +147,7 @@ class CarModel:
 
     def zoom(self, factor):
         self.ppu = max(10, self.ppu + factor)
-        scale_factor = self.ppu / 60
+        scale_factor = self.ppu / self.scale_factor
         self.background_image_scaled = pg.transform.scale(self.background_image, (int(self.background_image.get_width() * scale_factor), int(self.background_image.get_height() * scale_factor)))
    
     def switch_track(self, track_index=None):
@@ -172,7 +173,7 @@ class CarModel:
         background_image_path = Path(track_image_path.replace(".png", "_bg.png"))
         if background_image_path.exists():
             self.background_image = pg.image.load(background_image_path)
-            scale_factor = self.ppu / 60
+            scale_factor = self.ppu / self.scale_factor
             self.background_image_scaled = pg.transform.scale(self.background_image, (int(self.background_image.get_width() * scale_factor), int(self.background_image.get_height() * scale_factor)))
         else:
             self.background_image = None
@@ -200,7 +201,7 @@ class CarModel:
         outer_boundary = np.append(outer_boundary, [outer_boundary[0]], axis=0)
 
         # Scale the contours to make suitable for the simulation
-        inner_boundary, outer_boundary = inner_boundary / 60, outer_boundary / 60
+        inner_boundary, outer_boundary = inner_boundary / self.scale_factor, outer_boundary / self.scale_factor
         return {
             'inner': inner_boundary,
             'outer': outer_boundary
@@ -319,8 +320,20 @@ class CarModel:
         self.collision = sensors_min < 0.2
 
     def _update_camera_position(self, screen):
-        self.camera_position = self.position - (Vector2(*screen.get_rect().center) / self.ppu)
+        '''
+        Update the camera position based on the car position and the screen size
+        '''
+        # Center camera on track if track fits on screen
+        screen_width = screen.get_size()[0]
+        background_width = self.background_image.get_size()[0] / self.scale_factor * self.ppu
+        if screen_width < background_width:
+            self.camera_position = self.position - (Vector2(*screen.get_rect().center) / self.ppu)
+        else:
+            track_center = Vector2(*self.background_image.get_rect().center) / self.scale_factor
+            self.camera_position = track_center - (Vector2(*screen.get_rect().center) / self.ppu)
+
         self.camera_position_smooth = self.camera_position_smooth * 0.92 + self.camera_position * 0.08
+            
 
     def _update_lidar_data(self):
         '''Update the lidar sensor data by raycasting into the track boundaries'''
@@ -671,7 +684,7 @@ class MiniF1RLEnv(gymnasium.Env):
         if self.screen is None:
             pg.init()
             pg.display.init()
-            self.screen = pg.display.set_mode((800, 600), pg.RESIZABLE)
+            self.screen = pg.display.set_mode(START_WINDOW_SIZE, pg.RESIZABLE)
             pg.display.set_caption("MiniF1RL")
 
 
@@ -700,7 +713,12 @@ class MiniF1RLEnv(gymnasium.Env):
                             "left": False, 
                             "right": False, 
                             "boost": False}
-        events = pg.event.get()
+        try:
+            events = pg.event.get()
+        except pg.error:
+            pg.init()
+            events = pg.event.get()
+
         # Event handling
         done = False
         for event in events:
@@ -773,11 +791,7 @@ class MiniF1RLEnv(gymnasium.Env):
 if __name__ == '__main__':
     env = MiniF1RLEnv()
 
-    pg.init()
-
     done = False
-
- 
     last_frame = datetime.now()
     while not done:
 
