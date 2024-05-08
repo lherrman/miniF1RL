@@ -686,6 +686,8 @@ class MiniF1RLEnv(gymnasium.Env):
             pg.display.init()
             self.screen = pg.display.set_mode(START_WINDOW_SIZE, pg.RESIZABLE)
             pg.display.set_caption("MiniF1RL")
+            icon = pg.image.load("assets/icon.png")
+            pg.display.set_icon(icon)
 
 
         self.screen.fill((0, 0, 0))
