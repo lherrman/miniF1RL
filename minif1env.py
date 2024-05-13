@@ -79,9 +79,8 @@ class CarModel:
         self.acceleration_speed = cfg.get("acceleration")
         self.steering_speed = cfg.get("steering_speed")
         self.boost_factor = cfg.get("boost_factor")
-        self.drag_coefficient = cfg.get("drag_coefficient") # Currently not used
-        self.slipage_coefficient = cfg.get("slipage_coefficient") # Currently not used
-        self.drifting_coefficient = cfg.get("drifting_coefficient") # Currently not used
+        self.drag_coefficient = cfg.get("drag_coefficient") 
+        self.drifting_coefficient = cfg.get("drifting_coefficient") 
 
     def get_observation(self):
         # Returns the observation of the car (lidar sensor data) and the steering angle
