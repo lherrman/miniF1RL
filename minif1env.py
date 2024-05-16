@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import glob
 import os
 from pathlib import Path
@@ -16,6 +16,8 @@ from config import Config as cfg
 import gymnasium
 from gymnasium import spaces
 
+from helpers import raycast
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +28,7 @@ DEFAULT_TRACK_INDEX = 1
 
 # Parts of this class are based on the CarModel class i implemented for another project (SlamCar)
 # (base_model.py) https://github.com/lherrman/slamcar-controller
+
 
 class CarModel:
     def __init__(self, x, y):
@@ -206,6 +209,12 @@ class CarModel:
             'outer': outer_boundary
         }   
 
+    def _get_neares_point_from_boundary(self, position, boundary='inner'):
+        boundary_points = self.track_boundaries[boundary]
+        distances = np.linalg.norm(boundary_points - position, axis=1)
+        nearest_point_index = np.argmin(distances)
+        return boundary_points[nearest_point_index]
+
     def _calculate_middle_line(self):
         middle_line = []
         for point_inner in self.track_boundaries['inner']:
@@ -215,7 +224,7 @@ class CarModel:
         return middle_line
 
     def _init_lidar_sensor_vectors(self, sensor_angles):
-        self.lidar_sensor_vectors = []
+        self.lidar_sensor_vectors: list[Vector2] = []
         for i in sensor_angles:
             angle = math.radians(i)
             self.lidar_sensor_vectors.append(Vector2(math.cos(angle), math.sin(angle)))
@@ -340,90 +349,17 @@ class CarModel:
         for i, sensor_vector in enumerate(self.lidar_sensor_vectors):
             sensor_vector = sensor_vector.rotate(-self.heading.angle_to(Vector2(1, 0)))
             self.current_sensor_vectors.append(sensor_vector)
-            self.lidar_sensor_intercepts[i] = self._raycast(self.position, sensor_vector, self.lidar_max_distance)
+            sensor_vector_array = np.array([sensor_vector.x, sensor_vector.y])
+            position_array = np.array([self.position.x, self.position.y])
+            track_boundaries = [np.array(boundary) for boundary in self.track_boundaries.values()]
+            self.lidar_sensor_intercepts[i] = raycast(position_array, sensor_vector_array, self.lidar_max_distance, track_boundaries)
             
             # set the distance to the sensor intercept
             if self.lidar_sensor_intercepts[i] is not None:
-                self.lidar_sensor_distances[i] = (self.lidar_sensor_intercepts[i] - self.position).length()
+                intercept_array = self.lidar_sensor_intercepts[i]
+                self.lidar_sensor_distances[i] = np.linalg.norm(intercept_array - position_array)
             else:
                 self.lidar_sensor_distances[i] = self.lidar_max_distance
-
-    def _raycast(self, position, direction, max_distance):
-        '''
-        Shoot a ray from position in direction for max_distance into the track boundaries
-        Return the intersection point
-        '''
-        # Implemented by ChatGPT
-        # Convert position and direction to Vector2
-        position = Vector2(position[0], position[1])
-        direction = Vector2(direction[0], direction[1]).normalize()
-
-        # Initialize variables to keep track of the nearest intersection point and its distance
-        nearest_intersection = None
-        nearest_distance = float('inf')
-
-        # Iterate over each boundary segment
-        for boundary in self.track_boundaries.values():
-            boundary_points = [Vector2(p[0], p[1]) for p in boundary]
-            for i in range(len(boundary_points) - 1):
-                p1 = boundary_points[i]
-                p2 = boundary_points[i + 1]
-
-                # Check if the ray intersects with this line segment
-                intersection_point = self._segment_intersection(position, position + direction * max_distance, p1, p2)
-                if intersection_point is not None:
-                    # Calculate the distance between the position and the intersection point
-                    distance = (intersection_point - position).length()
-
-                    # Update the nearest intersection point if this intersection is closer
-                    if distance < nearest_distance:
-                        nearest_intersection = intersection_point
-                        nearest_distance = distance
-
-        # Return the nearest intersection point
-        return nearest_intersection
-
-    def _get_neares_point_from_boundary(self, position, boundary='inner'):
-        # Get the nearest point from the inner boundary
-        # Implemented by ChatGPT
-        nearest_point = None
-        nearest_distance = float('inf')
-        for point in self.track_boundaries[boundary]:
-            distance = (position - Vector2(*point)).length()
-            if distance < nearest_distance:
-                nearest_distance = distance
-                nearest_point = Vector2(*point)
-        return nearest_point
-
-    def _segment_intersection(self, p1, p2, p3, p4):
-        # Function to find the intersection point of two line segments
-        # Implemented by ChatGPT
-        def _ccw(A, B, C):
-            return (C.y-A.y) * (B.x-A.x) > (B.y-A.y) * (C.x-A.x)
-
-        def _intersect(A, B, C, D):
-            return _ccw(A,C,D) != _ccw(B,C,D) and _ccw(A,B,C) != _ccw(A,B,D)
-
-        if _intersect(p1, p2, p3, p4):
-            # Calculate the intersection point
-            a1 = p2.y - p1.y
-            b1 = p1.x - p2.x
-            c1 = a1 * p1.x + b1 * p1.y
-            
-            a2 = p4.y - p3.y
-            b2 = p3.x - p4.x
-            c2 = a2 * p3.x + b2 * p3.y
-            
-            det = a1 * b2 - a2 * b1
-            
-            if det == 0:
-                return None  # Parallel lines
-            else:
-                x = (b2 * c1 - b1 * c2) / det
-                y = (a1 * c2 - a2 * c1) / det
-                return Vector2(x, y)
-        else:
-            return None  # No intersection
         
     def draw(self, screen):
 
@@ -794,22 +730,44 @@ if __name__ == '__main__':
 
     done = False
     last_frame = datetime.now()
+    last_tick = datetime.now()
+    tick_rate = 240
+    fps = 60
+
+    limit_ticks = False
+    
+
+    tick_time = timedelta(seconds=0)
     while not done:
 
         # Limit framerate for manual controlls
-        if (datetime.now() - last_frame).total_seconds() < 1/100:
+        now = datetime.now()
+        dt_frame = (now - last_frame).total_seconds()
+        dt_tick = (now - last_tick).total_seconds()
+        new_frame: bool = dt_frame > 1/fps
+        new_tick: bool = dt_tick > 1/tick_rate or not limit_ticks
+        if not new_frame and not new_tick:
             continue
-        last_frame = datetime.now()
+   
+        last_tick = now if new_tick else last_tick
+        last_frame = now if new_frame else last_frame
+        terminate = False
 
-        exit = env.handle_pg_events(human_control=True)
+        if dt_frame > 0 and dt_tick > 0 and new_frame:
+            print("\033[H\033[J")
+            print(f"FPS: {1/dt_frame:<6.2f} | Ticks: {1/dt_tick:<6.2f} | Tick Time: {tick_time*1000} ms")
 
-        observation, step_reward, terminate, info, idk = env.step(None)
-        env.render()
+        if new_frame:
+            done = env.handle_pg_events(human_control=True)
+            env.render()
+        
+        if new_tick:
+            time1 = datetime.now()
+            observation, step_reward, terminate, info, idk = env.step(None)
+            time2 = datetime.now()
+            tick_time = time2 - time1
+            if terminate:
+                env.reset()
 
-        if terminate:
-            env.reset()
-
-        if exit:
-            break
 
     env.close()
