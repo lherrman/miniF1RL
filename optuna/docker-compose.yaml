@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+    optuna-dashboard:
+        image: ghcr.io/optuna/optuna-dashboard
+        ports:
+            - 8080:8080 # host:container
+        working_dir: /opt/output/ml/hparam_tuning
+        volumes:
+            - ./output:/opt/output
+        # healthcheck:
+        #     test: ["CMD", "<tbd>", "-U", "osm"] 
+        #     interval: 10s
+        #     timeout: 30s
+        #     retries: 10
+        restart: always
+        command: sqlite:///hparam_tuning.db
+        deploy:
+            restart_policy:
+                condition: on-failure
+                delay: 10s
+                max_attempts: 5
