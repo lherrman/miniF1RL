@@ -62,6 +62,7 @@ class CarModel:
         self.lidar_max_distance = 50
         self.valid_position_bbox = ((-50, 50), (-50, 50))
 
+
         # Reward Weights
         self.W1_progress = 1000
         self.W2_speed = 1.0
@@ -96,6 +97,10 @@ class CarModel:
 
     def get_truncate(self):
         # Returns the termination condition of the car (collision or reaching the end of the track)
+        round_finished = self.progress > 0.99
+        info = {}
+        if round_finished:
+            info["round_finished"] = True
         return self.progress > 0.99
     
     def get_reward(self):
@@ -575,14 +580,17 @@ class MiniF1RLEnv(gymnasium.Env):
         self.last_step = datetime.now()
 
         self.dt = 1/30 # Fixed timestep
+        self.laptime = 0.0
 
     def step(self, action):
+
+        self.laptime += self.dt
 
         # Update car model
         if action is not None:
             match action:
                 case 0:  # Nothing
-                    self.car_model.update_velocity(False, False, False, self.dt)
+                    self.car_model.update_velocity(True, False, False, self.dt)
                     self.car_model.update_steering(False, False, self.dt)
                 case 1:  # Left
                     self.car_model.update_velocity(True, False, False, self.dt)
@@ -600,20 +608,27 @@ class MiniF1RLEnv(gymnasium.Env):
         truncate = self.car_model.get_truncate()
         observation = self.car_model.get_observation()
         step_reward = self.car_model.get_reward()
+
+        self.prev_reward = step_reward
+        self.reward += step_reward
         if action is not None:
-            self.reward -= 0.1 
+            self.reward -= 0.001
 
         self.car_model.update(self.dt)
-        return observation, step_reward, terminate, truncate, {}
+        info = {}
+        if truncate:
+            info["laptime"] = self.laptime
+        return observation, step_reward, terminate, truncate, info
         
     def reset(self, **kwargs):
         super().reset(**kwargs)
         self.reward = 0
         self.prev_reward = 0
+        self.laptime = 0.0
 
         self.car_model.reset()
 
-        return self.step(None)[0], None
+        return self.step(None)[0], {}
 
     def render(self, mode='human'):
         if self.screen is None:
@@ -728,16 +743,15 @@ class MiniF1RLEnv(gymnasium.Env):
 if __name__ == '__main__':
     env = MiniF1RLEnv()
 
-    done = False
     last_frame = datetime.now()
     last_tick = datetime.now()
-    tick_rate = 240
+    tick_rate = 60
     fps = 60
 
-    limit_ticks = False
+    limit_ticks = True
     
-
     tick_time = timedelta(seconds=0)
+    done = False
     while not done:
 
         # Limit framerate for manual controlls
