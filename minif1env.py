@@ -65,7 +65,7 @@ class CarModel:
 
         # Reward Weights
         self.W1_progress = 1000
-        self.W2_speed = 1.0
+        self.W2_speed = 10.0
         self.W3_finish = 100
         self.W4_collision = -200
 
@@ -612,7 +612,7 @@ class MiniF1RLEnv(gymnasium.Env):
         self.prev_reward = step_reward
         self.reward += step_reward
         if action is not None:
-            self.reward -= 0.001
+            self.reward *= 0.9
 
         self.car_model.update(self.dt)
         info = {}
