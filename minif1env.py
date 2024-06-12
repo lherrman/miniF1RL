@@ -86,22 +86,75 @@ class CarModel:
         self.drag_coefficient = cfg.get("drag_coefficient") 
         self.drifting_coefficient = cfg.get("drifting_coefficient") 
 
+    def update(self, dt):
+        self._update_position(dt)
+        self._update_lidar_data()
+        self._update_track_collision()
+        self._calculate_track_progress()
+  
+    def update_steering(self, left, right, dt):
+        if left:
+            self.steering = max(-self.max_steering, self.steering - self.steering_speed * dt)
+
+        if right:
+            self.steering = min(self.max_steering, self.steering + self.steering_speed * dt)
+
+        # If neither is pressed, reduce steering to 0
+        # back_steer_factor determines how fast the steering will go back to 0
+        back_steer_factor = 2
+        if not left and not right:
+            if self.steering > 0:
+                self.steering = max(0, self.steering - self.steering_speed * dt * back_steer_factor)
+            else:
+                self.steering = min(0, self.steering + self.steering_speed * dt * back_steer_factor)
+
+        # Write controlls buffer
+        self.controlls_buffer["left"] = left
+        self.controlls_buffer["right"] = right
+        
+    def update_velocity(self, up: bool, down: bool, boost: bool, dt: float):
+        # Boost increases the max velocity and acceleration speed
+        max_velocity = self.max_velocity if not boost else self.max_velocity * 3
+        acceleration_speed = self.acceleration_speed if not boost else self.acceleration_speed * 3
+
+        # Update velocity
+        if up:
+            self.velocity_magnitude = min(max_velocity, 
+                                          self.velocity_magnitude + acceleration_speed * dt)
+        if down:
+            self.velocity_magnitude = max(0, 
+                                          self.velocity_magnitude - acceleration_speed * dt)
+            
+        # If neither is pressed, reduce velocity to 0
+        if not up and not down and not boost:
+            if self.velocity_magnitude > 0:
+                self.velocity_magnitude = max(0, self.velocity_magnitude - self.acceleration_speed * dt)
+            else:
+                self.velocity_magnitude = min(0, self.velocity_magnitude + self.acceleration_speed * dt)
+
+        # Write controlls buffer to draw the controlls in the UI
+        self.controlls_buffer["up"] = up
+        self.controlls_buffer["down"] = down
+        self.controlls_buffer["boost"] = boost
+
     def get_observation(self):
         # Returns the observation of the car (lidar sensor data) and the steering angle
         return np.array(self.lidar_sensor_distances + [self.steering])
 
     def get_termination(self):
+        '''
+        Returns True if the car is colliding with the track boundaries or if the car is outside the valid position bbox
+        '''
         car_invalid_position = (not self.valid_position_bbox[0][0] < self.position.x < self.valid_position_bbox[0][1] 
                                 or not self.valid_position_bbox[1][0] < self.position.y < self.valid_position_bbox[1][1])
         return self.collision or car_invalid_position
 
     def get_truncate(self):
-        # Returns the termination condition of the car (collision or reaching the end of the track)
+        '''
+        Returns True if the car has finished the track
+        '''
         round_finished = self.progress > 0.99
-        info = {}
-        if round_finished:
-            info["round_finished"] = True
-        return self.progress > 0.99
+        return round_finished
     
     def get_reward(self):
         
@@ -174,6 +227,9 @@ class CarModel:
         return available_tracks
 
     def _set_track(self, track_image_path):
+        '''
+        Set the track boundaries and the middle line from the track image
+        '''
         self.track_boundaries = self._get_track_boundaries_from_image(track_image_path)
         self.middle_line = self._calculate_middle_line()
         self.progress_boundary = self._calculate_track_progress_boundary()
@@ -247,12 +303,6 @@ class CarModel:
         progress_boundary = progress_boundary[::-1] # reverse the array
         return progress_boundary
 
-    def update(self, dt):
-        self._update_position(dt)
-        self._update_lidar_data()
-        self._update_track_collision()
-        self._calculate_track_progress()
-  
     def _calculate_track_progress(self):
         nearest_point = self._get_neares_point_from_boundary(self.position)
         index = np.where(np.all(self.progress_boundary == nearest_point, axis=1))[0][0]
@@ -280,51 +330,6 @@ class CarModel:
         # Update position
         self.position += self.velocity * dt
 
-
-    def update_steering(self, left, right, dt):
-        if left:
-            self.steering = max(-self.max_steering, self.steering - self.steering_speed * dt)
-
-        if right:
-            self.steering = min(self.max_steering, self.steering + self.steering_speed * dt)
-
-        # If neither is pressed, reduce steering to 0
-        # back_steer_factor determines how fast the steering will go back to 0
-        back_steer_factor = 2
-        if not left and not right:
-            if self.steering > 0:
-                self.steering = max(0, self.steering - self.steering_speed * dt * back_steer_factor)
-            else:
-                self.steering = min(0, self.steering + self.steering_speed * dt * back_steer_factor)
-
-        # Write controlls buffer
-        self.controlls_buffer["left"] = left
-        self.controlls_buffer["right"] = right
-        
-    def update_velocity(self, up: bool, down: bool, boost: bool, dt: float):
-        # Boost increases the max velocity and acceleration speed
-        max_velocity = self.max_velocity if not boost else self.max_velocity * 3
-        acceleration_speed = self.acceleration_speed if not boost else self.acceleration_speed * 3
-
-        # Update velocity
-        if up:
-            self.velocity_magnitude = min(max_velocity, 
-                                          self.velocity_magnitude + acceleration_speed * dt)
-        if down:
-            self.velocity_magnitude = max(0, 
-                                          self.velocity_magnitude - acceleration_speed * dt)
-            
-        # If neither is pressed, reduce velocity to 0
-        if not up and not down and not boost:
-            if self.velocity_magnitude > 0:
-                self.velocity_magnitude = max(0, self.velocity_magnitude - self.acceleration_speed * dt)
-            else:
-                self.velocity_magnitude = min(0, self.velocity_magnitude + self.acceleration_speed * dt)
-
-        # Write controlls buffer to draw the controlls in the UI
-        self.controlls_buffer["up"] = up
-        self.controlls_buffer["down"] = down
-        self.controlls_buffer["boost"] = boost
 
     def _update_track_collision(self):
         '''Check if the car is colliding with the track boundaries'''
